@@ -1,0 +1,138 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217 32% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 32% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 32% 17%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 32% 17%;
+    --input: 217 32% 17%;
+    --ring: 212 26% 83%;
+
+    --radius: 0.5rem;
+    
+    /* Studio Specific Colors - Dark Mode Default */
+    --studio-background: 230 30% 10%;
+    --studio-background-accent: 230 30% 13%;
+    --studio-foreground: 210 40% 98%;
+    --studio-primary: 250 100% 65%;
+    --studio-secondary: 190 80% 50%;
+    --studio-accent: 280 100% 70%;
+    --studio-border: 230 20% 20%;
+    --studio-highlight: 60 100% 70%;
+    --studio-success: 142 76% 45%;
+    --studio-warning: 35 92% 65%;
+    --studio-error: 358 75% 59%;
+    --studio-info: 215 100% 65%;
+  }
+
+  .light {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 222 47% 11%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 46%;
+
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214 31% 91%;
+    --input: 214 31% 91%;
+    --ring: 222 47% 11%;
+    
+    /* Studio Specific Colors - Light Mode */
+    --studio-background: 220 25% 97%;
+    --studio-background-accent: 220 25% 94%;
+    --studio-foreground: 230 30% 15%;
+    --studio-primary: 250 100% 55%;
+    --studio-secondary: 190 80% 45%;
+    --studio-accent: 280 100% 60%;
+    --studio-border: 220 20% 90%;
+    --studio-highlight: 50 100% 50%;
+    --studio-success: 142 76% 40%;
+    --studio-warning: 35 92% 50%;
+    --studio-error: 358 75% 55%;
+    --studio-info: 215 100% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-studio-background text-studio-foreground;
+  }
+  
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-studio-border rounded-full;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/50;
+  }
+  
+  /* Glass effect */
+  .glass {
+    @apply bg-studio-background/80 backdrop-blur-md border border-studio-border/50;
+  }
+  
+  .panel {
+    @apply bg-studio-background-accent rounded-lg border border-studio-border;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

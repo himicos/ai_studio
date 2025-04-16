@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import ForceGraph2D from 'react-force-graph-2d';
 import { PanelId } from "@/contexts/WorkspaceContext";
@@ -62,6 +62,35 @@ interface MemoryPanelProps {
 // Define node sizing modes
 type NodeSizingMode = 'uniform' | 'importance' | 'recency' | 'frequency';
 
+// Add parameters for improved visualization
+const NODE_SIZE = {
+  MIN: 4,        // Minimum node size 
+  MAX: 15,       // Maximum node size (increased for better visibility)
+  HIGHLIGHT_FACTOR: 1.3  // How much bigger highlighted nodes should be
+};
+
+// Define relationship colors for better visibility  
+const RELATION_COLORS = {
+  uses: "#ff6b6b",       // Red for "uses" relationships
+  follows: "#4ecdc4",    // Teal for "follows" relationships
+  implements: "#f9c74f", // Yellow for "implements" relationships
+  stores: "#43aa8b",     // Green for "stores" relationships
+  informs: "#6a0dad",    // Purple for "informs" relationships
+  guides: "#fb8500",     // Orange for "guides" relationships
+  powers: "#023e8a",     // Dark blue for "powers" relationships
+  defines: "#d62828",    // Dark red for "defines" relationships
+  applies: "#9381ff",    // Light purple for "applies" relationships
+  serves: "#14746f",     // Dark teal for "serves" relationships
+  default: "#9333ea"     // Default purple
+};
+
+// Add this new interface for relationship focus
+interface RelationshipView {
+  source: MemoryNode;
+  target: MemoryNode;
+  edge: MemoryEdge;
+}
+
 export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [activeTab, setActiveTab] = useState("connections");
   const [promptText, setPromptText] = useState("");
@@ -97,6 +126,11 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const [graphDimensions, setGraphDimensions] = useState({ width: 0, height: 0 });
 
+  // Add state for relationship filtering
+  const [relationshipFilter, setRelationshipFilter] = useState<string | null>(null);
+  const [nodeTypeFilter, setNodeTypeFilter] = useState<string | null>(null);
+  const [showRelationshipsView, setShowRelationshipsView] = useState(false);
+  
   const filteredNodes = sampleNodes.filter(node => 
     node.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
     node.type.toLowerCase().includes(searchQuery.toLowerCase())
@@ -292,7 +326,16 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     }
   };
 
-  // Add new function to handle semantic search within the graph
+  // Add a function to determine if an edge should be highlighted
+  const isEdgeHighlighted = useCallback((source: string, target: string): boolean => {
+    // If we're not in highlight mode, don't highlight any edges
+    if (highlightedNodes.size === 0) return false;
+    
+    // Highlight edges where both source and target are highlighted
+    return highlightedNodes.has(source) && highlightedNodes.has(target);
+  }, [highlightedNodes]);
+
+  // Update the handleGraphSearch function to improve highlighting
   const handleGraphSearch = async () => {
     if (!graphQuery.trim() || graphNodes.length === 0) return;
     
@@ -303,19 +346,54 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
         query_text: graphQuery,
         min_similarity: 0.3 // Lower threshold for graph visualization
       };
-      const results = await searchMemoryNodes(payload);
       
-      // Create a set of highlighted node IDs
-      const nodeIds = new Set(results.map(result => result.id));
-      setHighlightedNodes(nodeIds);
-      
-      if (results.length === 0) {
-        toast.info("No similar nodes found in the graph.");
-      } else {
-        toast.success(`Found ${results.length} related node(s) in the graph.`);
+      // Try to use the API, fall back to client-side search if it fails
+      try {
+        const results = await searchMemoryNodes(payload);
+        
+        // Create a set of highlighted node IDs
+        const nodeIds = new Set(results.map(result => result.id));
+        setHighlightedNodes(nodeIds);
+        
+        if (results.length === 0) {
+          toast.info("No similar nodes found in the graph.");
+        } else {
+          toast.success(`Found ${results.length} related node(s) in the graph.`);
+          
+          // Try to track nodes (but don't fail if API returns 405)
+          results.forEach(node => {
+            trackNodeAccess({
+              node_id: node.id,
+              access_type: 'search_result',
+              access_weight: node.similarity // Weight by similarity
+            }).catch(error => {
+              console.error(`Failed to track search result for node ${node.id}:`, error);
+              // Silently continue on error
+            });
+          });
+        }
+      } catch (error) {
+        console.warn("API search failed, falling back to client-side search:", error);
+        
+        // Perform a basic client-side search
+        const queryTerms = graphQuery.toLowerCase().split(/\s+/);
+        const matchingNodes = graphNodes.filter(node => {
+          const nodeContent = node.content.toLowerCase();
+          return queryTerms.some(term => nodeContent.includes(term));
+        });
+        
+        // Create a set of highlighted node IDs
+        const nodeIds = new Set(matchingNodes.map(node => node.id));
+        setHighlightedNodes(nodeIds);
+        
+        if (matchingNodes.length === 0) {
+          toast.info("No similar nodes found in the graph.");
+        } else {
+          toast.success(`Found ${matchingNodes.length} related node(s) in the graph.`);
+        }
       }
     } catch (error) {
-      console.error("Graph semantic search failed:", error);
+      console.error("Graph search failed:", error);
       const errorMsg = error instanceof Error ? error.message : "An unknown error occurred.";
       toast.error("Graph search failed", { description: errorMsg });
     } finally {
@@ -329,47 +407,61 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     setGraphQuery("");
   };
 
-  // Function to calculate node size based on weight mode
-  const calculateNodeSize = useCallback((nodeId: string): number => {
-    const baseSize = 4; // Default base size
-    const minSize = 3;  // Minimum size
-    const maxSize = 10; // Maximum size
+  // Function to get relationship color
+  const getRelationshipColor = useCallback((label: string, isHighlighted: boolean): string => {
+    const baseColor = RELATION_COLORS[label as keyof typeof RELATION_COLORS] || RELATION_COLORS.default;
+    return isHighlighted ? baseColor : `${baseColor}77`; // Add transparency if not highlighted
+  }, []);
+
+  // Modify the calculateNodeSize function to make size differences more dramatic
+  const calculateNodeSize = useCallback((nodeId: string, isHighlighted: boolean = false): number => {
+    const baseSize = NODE_SIZE.MIN; 
+    const minSize = NODE_SIZE.MIN;
+    const maxSize = NODE_SIZE.MAX; 
     
     if (nodeSizingMode === 'uniform') {
-      return baseSize;
+      return isHighlighted ? baseSize * NODE_SIZE.HIGHLIGHT_FACTOR : baseSize;
     }
     
     const metadata = nodeWeights[nodeId];
     if (!metadata) {
-      return baseSize;
+      return isHighlighted ? baseSize * NODE_SIZE.HIGHLIGHT_FACTOR : baseSize;
     }
     
     let sizeFactor = 1;
     
     switch (nodeSizingMode) {
       case 'importance':
+        // More dramatic scaling for importance
         sizeFactor = metadata.importance !== undefined ? metadata.importance : 1;
+        // Apply stronger non-linear scaling for more visible differences
+        sizeFactor = Math.pow(sizeFactor, 2); 
         break;
       case 'recency': {
         // Calculate recency factor based on last accessed time
-        // More recent = larger
+        // More recent = larger with faster decay
         if (metadata.last_accessed) {
           const now = Date.now() / 1000; // current time in seconds
-          const daysSinceAccess = (now - metadata.last_accessed) / (60 * 60 * 24);
-          // Exponential decay over time (1.0 to 0.1 over 30 days)
-          sizeFactor = Math.max(0.1, Math.exp(-daysSinceAccess / 30));
+          const hoursSinceAccess = (now - metadata.last_accessed) / (60 * 60);
+          // Much steeper decay over time (1.0 to 0.1 over 24 hours instead of 48)
+          sizeFactor = Math.max(0.1, Math.exp(-hoursSinceAccess / 6));
+          // Apply stronger non-linear scaling
+          sizeFactor = Math.pow(sizeFactor, 1.5);
         }
         break;
       }
       case 'frequency':
-        // Scale by access count (default to 1 if missing)
+        // More dramatic scaling by access count
         sizeFactor = metadata.access_count !== undefined ? 
-          Math.min(3, 0.5 + (metadata.access_count / 10)) : 1;
+          Math.min(4.0, 0.5 + (metadata.access_count / 3)) : 1;
         break;
     }
     
     // Apply size factor and clamp to min/max range
-    return Math.max(minSize, Math.min(maxSize, baseSize * sizeFactor));
+    const calculatedSize = Math.max(minSize, Math.min(maxSize, baseSize * sizeFactor));
+    
+    // If highlighted, make it even larger
+    return isHighlighted ? calculatedSize * NODE_SIZE.HIGHLIGHT_FACTOR : calculatedSize;
   }, [nodeSizingMode, nodeWeights]);
 
   // Handle node click to update access tracking
@@ -406,31 +498,106 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     });
   }, []);
 
-  // Modify the graphData object to include sizing information
-  const graphData = {
-    nodes: graphNodes.map(node => {
-      const isHighlighted = highlightedNodes.has(node.id);
-      return {
-        id: node.id, 
-        label: node.content.split('\n')[0].substring(0,30),
-        fullContent: node.content,
-        type: node.type,
-        highlighted: isHighlighted,
-        color: isHighlighted ? 
-          (node.type === 'prompt' ? '#9333ea' : 
-           node.type === 'document' ? '#3b82f6' : 
-           '#10b981') : 
-          undefined,
-        // Add size information based on current mode
-        size: calculateNodeSize(node.id)
-      };
-    }),
-    links: graphEdges.map(edge => ({ 
-      source: edge.source_node_id,
-      target: edge.target_node_id,
-      label: edge.label,
-    }))
-  };
+  // Modify the graphData object to include filtering
+  const graphData = useMemo(() => {
+    // Filter nodes based on node type filter
+    const filteredNodes = graphNodes.filter(node => 
+      !nodeTypeFilter || node.type === nodeTypeFilter
+    );
+    
+    // Get IDs of filtered nodes for edge filtering
+    const filteredNodeIds = new Set(filteredNodes.map(node => node.id));
+    
+    // Filter edges based on relationship filter and filtered nodes
+    const filteredEdges = graphEdges.filter(edge => 
+      (!relationshipFilter || edge.label === relationshipFilter) && 
+      filteredNodeIds.has(edge.source_node_id) && 
+      filteredNodeIds.has(edge.target_node_id)
+    );
+    
+    return {
+      nodes: filteredNodes.map(node => {
+        const isHighlighted = highlightedNodes.has(node.id);
+        return {
+          id: node.id, 
+          label: node.content.split('\n')[0].substring(0,30),
+          fullContent: node.content,
+          type: node.type,
+          highlighted: isHighlighted,
+          color: isHighlighted ? 
+            (node.type === 'prompt' ? '#9333ea' : 
+            node.type === 'document' ? '#3b82f6' : 
+            '#10b981') : 
+            undefined,
+          size: calculateNodeSize(node.id, isHighlighted)
+        };
+      }),
+      links: filteredEdges.map(edge => {
+        const isEdgeHighlit = isEdgeHighlighted(edge.source_node_id, edge.target_node_id);
+        return { 
+          source: edge.source_node_id,
+          target: edge.target_node_id,
+          label: edge.label,
+          highlighted: isEdgeHighlit,
+          color: getRelationshipColor(edge.label, isEdgeHighlit)
+        };
+      })
+    };
+  }, [graphNodes, graphEdges, highlightedNodes, nodeTypeFilter, relationshipFilter, isEdgeHighlighted, getRelationshipColor, calculateNodeSize]);
+
+  // Calculate relationships for the relationships view
+  const relationships: RelationshipView[] = useMemo(() => {
+    if (graphNodes.length === 0 || graphEdges.length === 0) return [];
+    
+    // Create a map for faster node lookup
+    const nodeMap = new Map<string, MemoryNode>();
+    graphNodes.forEach(node => nodeMap.set(node.id, node));
+    
+    // Build relationship objects
+    return graphEdges
+      .filter(edge => {
+        // Apply relationship filter if present
+        if (relationshipFilter && edge.label !== relationshipFilter) return false;
+        
+        // Apply node type filter if present
+        if (nodeTypeFilter) {
+          const source = nodeMap.get(edge.source_node_id);
+          const target = nodeMap.get(edge.target_node_id);
+          if (!source || !target) return false;
+          if (source.type !== nodeTypeFilter && target.type !== nodeTypeFilter) return false;
+        }
+        
+        return true;
+      })
+      .map(edge => {
+        const source = nodeMap.get(edge.source_node_id);
+        const target = nodeMap.get(edge.target_node_id);
+        
+        // Skip invalid relationships
+        if (!source || !target) return null;
+        
+        return {
+          source,
+          target,
+          edge
+        };
+      })
+      .filter((item): item is RelationshipView => item !== null);
+  }, [graphNodes, graphEdges, relationshipFilter, nodeTypeFilter]);
+
+  // Find all unique relationship types
+  const relationshipTypes = useMemo(() => {
+    const types = new Set<string>();
+    graphEdges.forEach(edge => types.add(edge.label));
+    return Array.from(types).sort();
+  }, [graphEdges]);
+  
+  // Find all unique node types
+  const nodeTypes = useMemo(() => {
+    const types = new Set<string>();
+    graphNodes.forEach(node => types.add(node.type));
+    return Array.from(types).sort();
+  }, [graphNodes]);
 
   console.log('[DEBUG] MemoryPanel State Check:', {
     activeTab,
@@ -840,10 +1007,196 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
               </div>
             </div>
             
+            {/* Add filters right after the search bar */}
+            {graphNodes.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 p-2 bg-studio-background-accent rounded-md border border-studio-border mt-2">
+                <div className="flex items-center gap-2 mr-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Filters:</span>
+                  
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="h-8 bg-studio-background flex items-center gap-1"
+                      >
+                        <Filter className="size-3.5" />
+                        <span>{nodeTypeFilter || 'All Node Types'}</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={() => setNodeTypeFilter(null)}>
+                        <span>All Types</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {nodeTypes.map(type => (
+                        <DropdownMenuItem key={type} onClick={() => setNodeTypeFilter(type)}>
+                          <div className="flex items-center gap-2">
+                            <div 
+                              className="w-3 h-3 rounded-full" 
+                              style={{ 
+                                backgroundColor: type === 'prompt' ? '#9333ea' : 
+                                               type === 'document' ? '#3b82f6' : '#10b981'
+                              }}
+                            ></div>
+                            <span className="capitalize">{type}</span>
+                          </div>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                
+                <div className="flex items-center gap-2 mr-2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="h-8 bg-studio-background flex items-center gap-1"
+                      >
+                        <Link className="size-3.5" />
+                        <span>{relationshipFilter || 'All Relationships'}</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={() => setRelationshipFilter(null)}>
+                        <span>All Relationships</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {relationshipTypes.map(type => (
+                        <DropdownMenuItem key={type} onClick={() => setRelationshipFilter(type)}>
+                          <div className="flex items-center gap-2">
+                            <div 
+                              className="w-3 h-3 rounded-full" 
+                              style={{ backgroundColor: RELATION_COLORS[type as keyof typeof RELATION_COLORS] || RELATION_COLORS.default }}
+                            ></div>
+                            <span className="capitalize">{type}</span>
+                          </div>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  
+                  {(nodeTypeFilter || relationshipFilter) && (
+                    <Button 
+                      variant="ghost"
+                      size="sm" 
+                      onClick={() => {
+                        setNodeTypeFilter(null);
+                        setRelationshipFilter(null);
+                      }}
+                      className="h-8 px-2"
+                    >
+                      <X className="size-3.5" />
+                      <span className="ml-1">Clear</span>
+                    </Button>
+                  )}
+                </div>
+                
+                <Button 
+                  variant={showRelationshipsView ? "default" : "outline"}
+                  size="sm" 
+                  className="h-8 ml-auto"
+                  onClick={() => setShowRelationshipsView(!showRelationshipsView)}
+                >
+                  <Link className="size-3.5 mr-1" />
+                  {showRelationshipsView ? 'Hide Connections' : 'Show Connections'}
+                </Button>
+              </div>
+            )}
+
+            {/* Relationship list view - improved styling */}
+            {showRelationshipsView && graphNodes.length > 0 && (
+              <div className="mt-2 border border-studio-border rounded-md bg-studio-background overflow-hidden">
+                <div className="p-2 border-b border-studio-border flex justify-between items-center bg-studio-background-accent">
+                  <h3 className="text-sm font-medium">Connections View</h3>
+                  <Badge variant="outline" className="text-xs">
+                    {relationships.length} connection{relationships.length !== 1 ? 's' : ''}
+                  </Badge>
+                </div>
+                
+                <ScrollArea className="h-[200px]">
+                  {relationships.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-[180px] text-center">
+                      <div className="w-10 h-10 rounded-full bg-studio-accent/10 flex items-center justify-center mb-2">
+                        <Link className="text-studio-accent size-5" />
+                      </div>
+                      <p className="text-sm text-muted-foreground max-w-[250px]">
+                        {relationshipFilter || nodeTypeFilter ? 
+                          'No connections match the current filters.' : 
+                          'No connections available.'}
+                      </p>
+                      {(relationshipFilter || nodeTypeFilter) && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => {
+                            setNodeTypeFilter(null);
+                            setRelationshipFilter(null);
+                          }}
+                          className="mt-2"
+                        >
+                          Clear Filters
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-2 space-y-2">
+                      {relationships.map((rel) => (
+                        <div 
+                          key={rel.edge.id}
+                          className="p-3 bg-studio-background-accent rounded-md border border-studio-border transition-colors hover:bg-studio-background-accent/80"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-sm">
+                            <div className="flex items-center gap-1 min-w-0">
+                              <Badge 
+                                variant="outline" 
+                                className="text-xs capitalize shrink-0"
+                                style={{ backgroundColor: rel.source.type === 'prompt' ? '#9333ea33' : rel.source.type === 'document' ? '#3b82f633' : '#10b98133' }}
+                              >
+                                {rel.source.type}
+                              </Badge>
+                              <span className="font-medium truncate">{rel.source.content.split('\n')[0].substring(0, 30)}</span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1 px-2 shrink-0 self-center">
+                              <ArrowRight className="size-3.5" />
+                              <Badge 
+                                className="text-xs whitespace-nowrap"
+                                style={{ 
+                                  backgroundColor: RELATION_COLORS[rel.edge.label as keyof typeof RELATION_COLORS] || RELATION_COLORS.default,
+                                  color: 'white'
+                                }}
+                              >
+                                {rel.edge.label}
+                              </Badge>
+                              <ArrowRight className="size-3.5" />
+                            </div>
+                            
+                            <div className="flex items-center gap-1 min-w-0">
+                              <Badge 
+                                variant="outline" 
+                                className="text-xs capitalize shrink-0"
+                                style={{ backgroundColor: rel.target.type === 'prompt' ? '#9333ea33' : rel.target.type === 'document' ? '#3b82f633' : '#10b98133' }}
+                              >
+                                {rel.target.type}
+                              </Badge>
+                              <span className="font-medium truncate">{rel.target.content.split('\n')[0].substring(0, 30)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </ScrollArea>
+              </div>
+            )}
+
             {/* Graph Container */}
             <div 
               ref={graphContainerRef} 
-              className="flex-1 border border-studio-border rounded-lg overflow-hidden bg-studio-background-accent min-h-[350px] relative"
+              className={`flex-1 border border-studio-border rounded-lg overflow-hidden bg-studio-background-accent min-h-[350px] relative ${showRelationshipsView ? 'mt-2' : 'mt-0'}`}
             >
               {/* Loading indicator */}
               {isLoadingGraph && (
@@ -886,8 +1239,8 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                   graphData={graphData}
                   width={graphDimensions.width}
                   height={graphDimensions.height}
-                  nodeLabel="label" // Show label on hover
-                  backgroundColor="var(--graph-bg, #1a1a1a)" // Theme-sensitive background
+                  nodeLabel="label"
+                  backgroundColor="var(--graph-bg, #1a1a1a)"
                   backgroundImageUrl={`data:image/svg+xml,${encodeURIComponent(`
                     <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
                       <defs>
@@ -943,10 +1296,46 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                       <rect id="gridRect" width="100%" height="100%" fill="url(#darkGrid)"/>
                     </svg>
                   `)}`}
-                  // Node appearance and interaction
-                  nodeRelSize={nodeSizingMode === 'uniform' ? 4 : 1} // Base size, will be multiplied by node.size for non-uniform modes
-                  onNodeClick={handleNodeClick} // Track node access on click
-                  // Customize appearance
+                  
+                  // Node sizing and interaction
+                  nodeRelSize={nodeSizingMode === 'uniform' ? 4 : 1}
+                  onNodeClick={handleNodeClick}
+                  
+                  // Link styling - ENHANCED with directional particles and arrows
+                  linkLabel="label"
+                  linkWidth={(link) => {
+                    // @ts-ignore - add stronger width contrast
+                    return link.highlighted ? 3 : 1;
+                  }}
+                  linkColor={(link) => {
+                    // @ts-ignore - use relationship-specific colors
+                    return link.color;
+                  }}
+                  linkDirectionalParticles={(link) => {
+                    // @ts-ignore - more particles on highlighted links
+                    return link.highlighted ? 8 : 3;
+                  }}
+                  linkDirectionalParticleWidth={(link) => {
+                    // @ts-ignore - wider particles on highlighted links
+                    return link.highlighted ? 4 : 2;
+                  }}
+                  linkDirectionalParticleSpeed={(link) => {
+                    // @ts-ignore - faster particles on highlighted links
+                    return link.highlighted ? 0.015 : 0.006;
+                  }}
+                  linkDirectionalParticleColor={(link) => {
+                    // @ts-ignore - use relationship-specific colors for particles
+                    return link.color;
+                  }}
+                  // Add directional arrows
+                  linkDirectionalArrowLength={5}
+                  linkDirectionalArrowRelPos={0.8}
+                  linkDirectionalArrowColor={(link) => {
+                    // @ts-ignore
+                    return link.color;
+                  }}
+                  
+                  // Node appearance customization
                   nodeCanvasObject={(node, ctx, globalScale) => {
                     const label = node.label as string;
                     const fontSize = 12 / globalScale;
@@ -955,7 +1344,8 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                     const bgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4); // Box padding
                     
                     // Node visualization (circle with gradient)
-                    const nodeR = 5;
+                    // @ts-ignore - Use dynamically calculated size
+                    const nodeR = node.size || 5;
                     ctx.beginPath();
                     ctx.arc(node.x ?? 0, node.y ?? 0, nodeR, 0, 2 * Math.PI);
                     
@@ -967,10 +1357,10 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                     if (highlightedNodes.size > 0) {
                       // When we have active highlights
                       if (isHighlighted) {
-                        // Highlighted nodes are vibrant
+                        // Highlighted nodes are vibrant with stronger glow
                         const gradient = ctx.createRadialGradient(
                           node.x ?? 0, node.y ?? 0, 0,
-                          node.x ?? 0, node.y ?? 0, nodeR * 1.3 // Make highlighted nodes slightly larger
+                          node.x ?? 0, node.y ?? 0, nodeR * 1.3 // Make highlighted nodes glow larger
                         );
                         
                         if (nodeType === 'prompt') {
@@ -985,25 +1375,25 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                         }
                         
                         ctx.fillStyle = gradient;
-                        // Create glow effect
+                        // Create stronger glow effect
                         ctx.shadowColor = nodeType === 'prompt' ? '#9333ea' : nodeType === 'document' ? '#3b82f6' : '#10b981';
-                        ctx.shadowBlur = 8 * highlightIntensity;
+                        ctx.shadowBlur = 12 * highlightIntensity; // Increased glow
                       } else {
-                        // Non-highlighted nodes are muted
+                        // Non-highlighted nodes are more muted
                         const gradient = ctx.createRadialGradient(
                           node.x ?? 0, node.y ?? 0, 0,
                           node.x ?? 0, node.y ?? 0, nodeR
                         );
                         
                         if (nodeType === 'prompt') {
-                          gradient.addColorStop(0, '#9333ea44'); // Faded violet core
-                          gradient.addColorStop(1, '#7e22ce33'); // Faded violet edge
+                          gradient.addColorStop(0, '#9333ea33'); // More faded violet core
+                          gradient.addColorStop(1, '#7e22ce22'); // More faded violet edge
                         } else if (nodeType === 'document') {
-                          gradient.addColorStop(0, '#3b82f644'); // Faded blue core
-                          gradient.addColorStop(1, '#2563eb33'); // Faded blue edge
+                          gradient.addColorStop(0, '#3b82f633'); // More faded blue core
+                          gradient.addColorStop(1, '#2563eb22'); // More faded blue edge
                         } else {
-                          gradient.addColorStop(0, '#10b98144'); // Faded green core
-                          gradient.addColorStop(1, '#05966933'); // Faded green edge
+                          gradient.addColorStop(0, '#10b98133'); // More faded green core
+                          gradient.addColorStop(1, '#05966922'); // More faded green edge
                         }
                         
                         ctx.fillStyle = gradient;
@@ -1056,91 +1446,16 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
 
                     node.__bckgDimensions = bgDimensions; // Cache dimensions for selection highlighting
                   }}
-                  nodePointerAreaPaint={(node, color, ctx) => {
-                     // Highlight area on hover
-                     ctx.fillStyle = color;
-                     const bckgDimensions = node.__bckgDimensions as number[] | undefined;
-                     if (bckgDimensions) {
-                       ctx.fillRect((node.x ?? 0) - bckgDimensions[0] / 2, (node.y ?? 0) - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
-                     }
-                  }}
-                  // Link styling
-                  linkLabel="label"
-                  linkColor={() => "#ffffff33"} // Subtle link color
-                  linkWidth={1}
-                  linkDirectionalParticles={3} // More particles
-                  linkDirectionalParticleWidth={2} // Slightly thicker particles
-                  linkDirectionalParticleSpeed={0.006} // Slightly faster movement
-                  linkDirectionalParticleColor={() => "#9333ea"} // Violet particles
-                  linkCanvasObjectMode={() => "after"}
-                  linkCanvasObject={(link, ctx) => {
-                     const MAX_FONT_SIZE = 4;
-                     const LABEL_NODE_MARGIN = 8; // Adjusted node size estimate
-                     const start = link.source as any; // Cast to access x,y potentially
-                     const end = link.target as any;
-
-                     // Ignore unbound links
-                     if (typeof start !== 'object' || typeof end !== 'object') return;
-
-                     // Calculate label positioning
-                     const textPos = Object.assign({}, ...['x', 'y'].map(c => ({
-                       [c]: start[c] + (end[c] - start[c]) / 2 // Middle of line
-                     })));
-
-                     const relLink = { x: end.x - start.x, y: end.y - start.y };
-                     const maxTextLength = Math.sqrt(Math.pow(relLink.x, 2) + Math.pow(relLink.y, 2)) - LABEL_NODE_MARGIN * 2;
-
-                     let textAngle = Math.atan2(relLink.y, relLink.x);
-                     // Maintain label upright node_orientation
-                     if (textAngle > Math.PI / 2) textAngle = -(Math.PI - textAngle);
-                     if (textAngle < -Math.PI / 2) textAngle = -(-Math.PI - textAngle);
-
-                     const label = `${link.label}`;
-
-                     // Estimate fontSize to fit in link length
-                     ctx.font = '1px Sans-Serif';
-                     const fontSize = Math.min(MAX_FONT_SIZE, maxTextLength / ctx.measureText(label).width);
-                     ctx.font = `${fontSize}px Sans-Serif`;
-
-                     // Draw text label with better visibility
-                     ctx.save();
-                     ctx.translate(textPos.x, textPos.y);
-                     ctx.rotate(textAngle);
-                     
-                     // Background for text label (capsule shape)
-                     const labelWidth = ctx.measureText(label).width;
-                     const labelHeight = fontSize;
-                     const labelBgHeight = labelHeight * 1.2;
-                     const labelBgWidth = labelWidth * 1.2;
-                     const labelBgRadius = labelBgHeight / 2;
-                     
-                     ctx.fillStyle = 'rgba(18, 18, 18, 0.7)';
-                     // Draw rounded rectangle
-                     ctx.beginPath();
-                     ctx.moveTo(-labelBgWidth/2 + labelBgRadius, -labelBgHeight/2);
-                     ctx.lineTo(labelBgWidth/2 - labelBgRadius, -labelBgHeight/2);
-                     ctx.arc(labelBgWidth/2 - labelBgRadius, 0, labelBgRadius, -Math.PI/2, Math.PI/2);
-                     ctx.lineTo(-labelBgWidth/2 + labelBgRadius, labelBgHeight/2);
-                     ctx.arc(-labelBgWidth/2 + labelBgRadius, 0, labelBgRadius, Math.PI/2, -Math.PI/2);
-                     ctx.closePath();
-                     ctx.fill();
-                     
-                     // Text
-                     ctx.textAlign = 'center';
-                     ctx.textBaseline = 'middle';
-                     ctx.fillStyle = '#ffffff'; // White text
-                     ctx.fillText(label, 0, 0);
-                     ctx.restore();
-                  }}
-                  // Other ForceGraph props
-                  enableZoomInteraction={true}
-                  enablePanInteraction={true}
-                  cooldownTicks={100}
-                  cooldownTime={3000} // Longer cooldown for better stabilization
-                  d3AlphaDecay={0.015} // Slower decay for smoother motion
-                  d3VelocityDecay={0.2} // Less friction for more dynamic movement
+                  
+                  // Improved graph physics for better layout
+                  cooldownTicks={150}
+                  cooldownTime={5000}
+                  d3AlphaDecay={0.01} // Slower decay for more spread out layout
+                  d3VelocityDecay={0.15} // Lower decay for more movement
+                  d3Force="charge" // Add repulsive force between nodes
+                  d3ForceStrength={-120} // Stronger repulsion for more spacing
                 />
-              )} 
+              )}
             </div>
           </TabsContent>
 
