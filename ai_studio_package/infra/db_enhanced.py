@@ -1990,6 +1990,44 @@ def get_reddit_feed(
         logger.error(f"SQLite error fetching reddit feed: {e}")
         raise
 
+def get_top_reddit_posts(
+    conn: sqlite3.Connection,
+    limit: int = 10,
+    metric: str = 'score'
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves the top Reddit posts based on a specified metric.
+    
+    Args:
+        conn: Database connection
+        limit: Maximum number of posts to return
+        metric: Metric to sort by ('score', 'num_comments', or 'created_utc')
+        
+    Returns:
+        List of Reddit post dictionaries
+    """
+    cursor = conn.cursor()
+    
+    # Validate metric (prevent SQL injection)
+    valid_metrics = ['score', 'num_comments', 'created_utc']
+    sort_metric = metric if metric in valid_metrics else 'score'
+    
+    # For created_utc, we want newest first (DESC), but for other metrics we want highest first (DESC)
+    sort_direction = 'DESC'
+    
+    query = "SELECT * FROM reddit_posts ORDER BY ? ? LIMIT ?"
+    
+    try:
+        # SQLite doesn't support parameterized column names, so we need to construct the query differently
+        safe_query = f"SELECT * FROM reddit_posts ORDER BY {sort_metric} {sort_direction} LIMIT ?"
+        cursor.execute(safe_query, (limit,))
+        rows = cursor.fetchall()
+        # Convert Row objects to dictionaries
+        return [dict(row) for row in rows]
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error fetching top Reddit posts: {e}")
+        raise
+
 def get_tweet_by_id(conn: sqlite3.Connection, tweet_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve a specific tweet by its ID, joining with user handle."""
     cursor = conn.cursor()
@@ -2022,52 +2060,141 @@ def get_twitter_feed(
     sort_by: str = 'created_at', # Changed default to created_at
     sort_order: str = 'desc'
 ) -> List[Dict[str, Any]]:
-    """Retrieves a feed of Twitter posts from the database, with filtering and sorting."""
-    cursor = conn.cursor()
-    # Updated valid sort columns for tracked_tweets table
-    valid_sort_columns = [
-        'created_at', 'content', 'retweet_count', 
-        'like_count', 'reply_count', 'score' 
-    ]
-    sort_by_column = sort_by if sort_by in valid_sort_columns else 'created_at'
-    sort_direction = 'ASC' if sort_order.lower() == 'asc' else 'DESC'
-    
-    # Include user_handle from tracked_users table via JOIN
-    query = f"""
-        SELECT t.*, u.user_handle 
-        FROM tracked_tweets t
-        JOIN tracked_users u ON t.user_id = u.id 
     """
-    params: List[Union[str, int]] = [] # Need to import Union from typing
-
-    conditions = []
+    Get a feed of tweets from tracked users.
+    
+    Args:
+        conn: Database connection
+        limit: Maximum number of tweets to return
+        offset: Number of tweets to skip for pagination
+        keyword: Optional keyword to filter by
+        sort_by: Column to sort by
+        sort_order: Sort order ('asc' or 'desc')
+        
+    Returns:
+        List of tweet dictionaries
+    """
+    cursor = conn.cursor()
+    
+    # Validate sort_by column (prevent SQL injection)
+    valid_sort_columns = ['tweet_id', 'user_id', 'handle', 'content', 'created_at', 
+                          'retweet_count', 'like_count', 'reply_count', 'quote_count',
+                          'view_count', 'bookmark_count', 'url', 'score']
+    
+    if sort_by not in valid_sort_columns:
+        logger.warning(f"Invalid sort_by column: {sort_by}. Defaulting to 'created_at'")
+        sort_by = 'created_at'
+    
+    # Validate sort_order (prevent SQL injection)
+    sort_order = sort_order.upper()
+    if sort_order not in ['ASC', 'DESC']:
+        logger.warning(f"Invalid sort_order: {sort_order}. Defaulting to 'DESC'")
+        sort_order = 'DESC'
+    
+    # Construct the query
+    query = "SELECT * FROM tweets"
+    params = []
+    
+    # Add keyword filter if provided
     if keyword:
-        conditions.append("t.content LIKE ?")
+        query += " WHERE content LIKE ?"
         params.append(f"%{keyword}%")
     
-    # Add more conditions if needed (e.g., filter by user_id)
+    # Add sorting
+    query += f" ORDER BY {sort_by} {sort_order}"
     
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-
-    # Ensure ORDER BY references the table alias 't' if column names are ambiguous
-    query += f" ORDER BY t.{sort_by_column} {sort_direction}"
+    # Add limit and offset
     query += " LIMIT ? OFFSET ?"
     params.extend([limit, offset])
-
+    
+    # Execute query
     try:
         cursor.execute(query, params)
-        rows = cursor.fetchall()
-        # Convert Row objects to dictionaries
-        columns = [description[0] for description in cursor.description]
-        results = []
-        for row in rows:
-            tweet_dict = dict(zip(columns, row)) 
-            results.append(tweet_dict)
-        return results
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error fetching twitter feed: {e}")
-        raise # Re-raise to be handled by the API route
+        tweets = cursor.fetchall()
+        
+        # Convert the results to dictionaries
+        tweet_list = []
+        for tweet in tweets:
+            tweet_dict = dict(tweet)
+            
+            # Process JSON fields
+            for field in ['engagement', 'links', 'media', 'in_reply_to', 'keywords', 'metadata']:
+                if field in tweet_dict and tweet_dict[field]:
+                    try:
+                        tweet_dict[field] = json.loads(tweet_dict[field])
+                    except (json.JSONDecodeError, TypeError):
+                        tweet_dict[field] = {} if field in ['engagement', 'metadata'] else []
+                else:
+                    tweet_dict[field] = {} if field in ['engagement', 'metadata'] else []
+            
+            tweet_list.append(tweet_dict)
+        
+        return tweet_list
+        
+    except Exception as e:
+        logger.error(f"Error retrieving Twitter feed: {e}")
+        return []
+
+def get_top_twitter_posts(
+    conn: sqlite3.Connection,
+    limit: int = 10,
+    metric: str = 'retweet_count'
+) -> List[Dict[str, Any]]:
+    """
+    Get the top Twitter posts based on a specified metric.
+    
+    Args:
+        conn: Database connection
+        limit: Maximum number of tweets to return
+        metric: Metric to sort by (retweet_count, like_count, reply_count, score, created_at)
+        
+    Returns:
+        List of top tweet dictionaries
+    """
+    cursor = conn.cursor()
+    
+    # Validate metric (prevent SQL injection)
+    valid_metrics = ['retweet_count', 'like_count', 'reply_count', 'quote_count', 
+                     'view_count', 'bookmark_count', 'score', 'created_at']
+    
+    if metric not in valid_metrics:
+        logger.warning(f"Invalid metric: {metric}. Defaulting to 'retweet_count'")
+        metric = 'retweet_count'
+    
+    # Sort order should be descending for most metrics to get "top" posts,
+    # but ascending for 'created_at' to get most recent
+    sort_order = 'ASC' if metric == 'created_at' else 'DESC'
+    
+    # Construct the query to get top tweets
+    query = f"SELECT * FROM tweets ORDER BY {metric} {sort_order} LIMIT ?"
+    
+    # Execute query
+    try:
+        cursor.execute(query, (limit,))
+        tweets = cursor.fetchall()
+        
+        # Convert the results to dictionaries
+        tweet_list = []
+        for tweet in tweets:
+            tweet_dict = dict(tweet)
+            
+            # Process JSON fields
+            for field in ['engagement', 'links', 'media', 'in_reply_to', 'keywords', 'metadata']:
+                if field in tweet_dict and tweet_dict[field]:
+                    try:
+                        tweet_dict[field] = json.loads(tweet_dict[field])
+                    except (json.JSONDecodeError, TypeError):
+                        tweet_dict[field] = {} if field in ['engagement', 'metadata'] else []
+                else:
+                    tweet_dict[field] = {} if field in ['engagement', 'metadata'] else []
+            
+            tweet_list.append(tweet_dict)
+        
+        return tweet_list
+        
+    except Exception as e:
+        logger.error(f"Error retrieving top Twitter posts: {e}")
+        return []
 
 # === End Reddit Tracking Functions ===
 

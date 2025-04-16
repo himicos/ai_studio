@@ -284,54 +284,77 @@ def search_similar_nodes_faiss(
             logger.info(f"No nodes of type '{node_type}' found with similarity >= {min_similarity}")
             return []
         
-        # 4. Fetch full node data from the database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Prepare placeholder string for IN clause
-        placeholders = ','.join('?' * len(node_ids_to_fetch))
-        query = f"SELECT * FROM memory_nodes WHERE id IN ({placeholders})"
-        
-        cursor.execute(query, node_ids_to_fetch)
-        nodes_data = cursor.fetchall()
-        conn.close()
-        
-        # 5. Prepare final results with full node data and similarity scores
-        final_results = []
-        for node_row in nodes_data:
-            node_dict = dict(node_row)
-            node_id = node_dict['id']
+        # 4. Try to fetch full node data from the database
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            # Parse tags JSON
-            if node_dict.get('tags'):
-                try:
-                    node_dict['tags'] = json.loads(node_dict['tags'])
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to decode tags JSON for node {node_id}")
+            # Prepare placeholder string for IN clause
+            placeholders = ','.join('?' * len(node_ids_to_fetch))
+            query = f"SELECT * FROM memory_nodes WHERE id IN ({placeholders})"
+            
+            cursor.execute(query, node_ids_to_fetch)
+            nodes_data = cursor.fetchall()
+            conn.close()
+            
+            # 5. Prepare final results with full node data and similarity scores
+            final_results = []
+            for node_row in nodes_data:
+                node_dict = dict(node_row)
+                node_id = node_dict['id']
+                
+                # Parse tags JSON
+                if node_dict.get('tags'):
+                    try:
+                        node_dict['tags'] = json.loads(node_dict['tags'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to decode tags JSON for node {node_id}")
+                        node_dict['tags'] = []
+                else:
                     node_dict['tags'] = []
-            else:
-                node_dict['tags'] = []
-            
-            # Parse metadata JSON
-            if node_dict.get('metadata'):
-                try:
-                    node_dict['metadata'] = json.loads(node_dict['metadata'])
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to decode metadata JSON for node {node_id}")
+                
+                # Parse metadata JSON
+                if node_dict.get('metadata'):
+                    try:
+                        node_dict['metadata'] = json.loads(node_dict['metadata'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to decode metadata JSON for node {node_id}")
+                        node_dict['metadata'] = {}
+                else:
                     node_dict['metadata'] = {}
+                
+                # Add similarity score
+                node_dict['similarity'] = similarity_map.get(node_id, 0.0)
+                
+                final_results.append(node_dict)
+            
+            # Sort by similarity descending
+            final_results.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            logger.info(f"FAISS semantic search found {len(final_results)} similar nodes for query.")
+            return final_results
+            
+        except sqlite3.OperationalError as e:
+            # If the memory_nodes table doesn't exist or can't be accessed, 
+            # return simplified results from FAISS only
+            if "no such table: memory_nodes" in str(e):
+                logger.warning("memory_nodes table not found. Returning simplified FAISS results only.")
+                simplified_results = []
+                for result in results[:limit]:
+                    metadata = result.get('metadata', {})
+                    simplified_results.append({
+                        'id': metadata.get('id', 'unknown'),
+                        'type': metadata.get('type', 'unknown'),
+                        'title': metadata.get('title', ''),
+                        'content': '',  # No content in simplified results
+                        'created_at': metadata.get('created_at', 0),
+                        'tags': metadata.get('tags', []),
+                        'similarity': result.get('score', 0.0),
+                    })
+                return simplified_results
             else:
-                node_dict['metadata'] = {}
-            
-            # Add similarity score
-            node_dict['similarity'] = similarity_map.get(node_id, 0.0)
-            
-            final_results.append(node_dict)
-        
-        # Sort by similarity descending
-        final_results.sort(key=lambda x: x['similarity'], reverse=True)
-        
-        logger.info(f"FAISS semantic search found {len(final_results)} similar nodes for query.")
-        return final_results
+                # Re-raise other SQLite errors
+                raise
         
     except Exception as e:
         logger.error(f"Error during FAISS semantic search: {e}")

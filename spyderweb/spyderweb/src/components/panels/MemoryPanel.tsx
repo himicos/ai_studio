@@ -130,7 +130,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [relationshipFilter, setRelationshipFilter] = useState<string | null>(null);
   const [nodeTypeFilter, setNodeTypeFilter] = useState<string | null>(null);
   const [showRelationshipsView, setShowRelationshipsView] = useState(false);
-  
+
   const filteredNodes = sampleNodes.filter(node => 
     node.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
     node.type.toLowerCase().includes(searchQuery.toLowerCase())
@@ -223,8 +223,8 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
         // As a fallback, try one more time after all content has loaded
         window.requestAnimationFrame(() => {
           window.requestAnimationFrame(() => {
-            updateGraphDimensions();
-          });
+          updateGraphDimensions();
+      });
         });
       }, 100);
 
@@ -233,7 +233,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       };
     }
     
-    return undefined;
+    return undefined; 
   }, [activeTab, fetchGraphData, updateGraphDimensions]);
 
   const handleConnect = () => {
@@ -519,10 +519,10 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       nodes: filteredNodes.map(node => {
         const isHighlighted = highlightedNodes.has(node.id);
         return {
-          id: node.id, 
-          label: node.content.split('\n')[0].substring(0,30),
-          fullContent: node.content,
-          type: node.type,
+        id: node.id, 
+        label: node.content.split('\n')[0].substring(0,30),
+        fullContent: node.content,
+        type: node.type,
           highlighted: isHighlighted,
           color: isHighlighted ? 
             (node.type === 'prompt' ? '#9333ea' : 
@@ -535,9 +535,9 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       links: filteredEdges.map(edge => {
         const isEdgeHighlit = isEdgeHighlighted(edge.source_node_id, edge.target_node_id);
         return { 
-          source: edge.source_node_id,
-          target: edge.target_node_id,
-          label: edge.label,
+        source: edge.source_node_id,
+        target: edge.target_node_id,
+        label: edge.label,
           highlighted: isEdgeHighlit,
           color: getRelationshipColor(edge.label, isEdgeHighlit)
         };
@@ -852,44 +852,44 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
 
             <div className="flex-1 overflow-auto">
               <ScrollArea className="h-full min-h-[300px]">
-                <div className="p-4">
-                  {isLoadingSemanticSearch && (
-                    <p className="text-sm text-muted-foreground text-center py-4">Loading results...</p>
-                  )}
-                   {!isLoadingSemanticSearch && semanticResults.length === 0 && (
-                     <p className="text-sm text-muted-foreground text-center py-4">
-                       {semanticQuery ? 'No results found.' : 'Enter a query to start semantic search.'}
-                     </p>
-                  )}
-                  {semanticResults.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {semanticResults.map(node => (
-                        <Card key={node.id} className="bg-studio-background-accent mb-4">
-                          <CardHeader className="pb-2">
-                             <div className="flex justify-between items-start mb-1">
-                                <Badge variant="outline">{node.type}</Badge>
-                                <Badge variant="secondary" title="Similarity Score">
-                                   {(node.similarity * 100).toFixed(1)}%
-                                </Badge>
-                             </div>
-                             <CardTitle className="text-sm font-medium truncate" title={node.content}>
-                                {node.content.split('\\n')[0].substring(0, 100)}{node.content.length > 100 ? '...' : ''}
-                             </CardTitle>
-                             <CardDescription className="text-xs">
-                               ID: {node.id} | Created: {new Date(node.created_at * 1000).toLocaleDateString()}
-                             </CardDescription>
-                          </CardHeader>
-                          <CardContent className="text-xs text-muted-foreground pt-1 pb-3">
-                             <p className="line-clamp-3" title={node.content}> 
-                                {node.content.split('\\n').slice(1).join('\\n') || node.content}
-                             </p>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </ScrollArea>
+              <div className="p-4">
+                {isLoadingSemanticSearch && (
+                  <p className="text-sm text-muted-foreground text-center py-4">Loading results...</p>
+                )}
+                 {!isLoadingSemanticSearch && semanticResults.length === 0 && (
+                   <p className="text-sm text-muted-foreground text-center py-4">
+                     {semanticQuery ? 'No results found.' : 'Enter a query to start semantic search.'}
+                   </p>
+                )}
+                {semanticResults.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {semanticResults.map(node => (
+                      <Card key={node.id} className="bg-studio-background-accent mb-4">
+                        <CardHeader className="pb-2">
+                           <div className="flex justify-between items-start mb-1">
+                              <Badge variant="outline">{node.type}</Badge>
+                              <Badge variant="secondary" title="Similarity Score">
+                                 {(node.similarity * 100).toFixed(1)}%
+                              </Badge>
+                           </div>
+                           <CardTitle className="text-sm font-medium truncate" title={node.content}>
+                              {node.content.split('\\n')[0].substring(0, 100)}{node.content.length > 100 ? '...' : ''}
+                           </CardTitle>
+                           <CardDescription className="text-xs">
+                             ID: {node.id} | Created: {new Date(node.created_at * 1000).toLocaleDateString()}
+                           </CardDescription>
+                        </CardHeader>
+                        <CardContent className="text-xs text-muted-foreground pt-1 pb-3">
+                           <p className="line-clamp-3" title={node.content}> 
+                              {node.content.split('\\n').slice(1).join('\\n') || node.content}
+                           </p>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
             </div>
           </TabsContent>
 
@@ -914,8 +914,8 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                   <Zap className="size-3.5" />
                   {isGeneratingGraph ? "Creating..." : "Create & Visualize"} 
                 </Button>
-              </div>
-              
+            </div>
+            
               {/* Add semantic search controls for the graph */}
               <div className="flex items-center gap-2 p-1 bg-studio-background-accent rounded-md border border-studio-border">
                 <Input 
@@ -1342,7 +1342,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                     ctx.font = `${fontSize}px Sans-Serif`;
                     const textWidth = ctx.measureText(label).width;
                     const bgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4); // Box padding
-                    
+
                     // Node visualization (circle with gradient)
                     // @ts-ignore - Use dynamically calculated size
                     const nodeR = node.size || 5;
@@ -1439,8 +1439,8 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                     ctx.strokeRect((node.x ?? 0) - bgDimensions[0] / 2, (node.y ?? 0) - bgDimensions[1] / 2, bgDimensions[0], bgDimensions[1]);
 
                     // Text
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
+                     ctx.textAlign = 'center';
+                     ctx.textBaseline = 'middle';
                     ctx.fillStyle = '#ffffff'; // White text for better contrast
                     ctx.fillText(label, node.x ?? 0, node.y ?? 0);
 
@@ -1455,7 +1455,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                   d3Force="charge" // Add repulsive force between nodes
                   d3ForceStrength={-120} // Stronger repulsion for more spacing
                 />
-              )}
+              )} 
             </div>
           </TabsContent>
 
