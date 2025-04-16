@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1907856855596158982#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "Reconfiguring AllCoreDevs \n\nTo deliver on Ethereum's ambitious L1 roadmap, we should decouple planning and execution. To that end, I'm proposing we reorient ACD to focus on scoping future forks, and elevate our existing testing calls as the main venue for the current ones. \n\n\ud83e\uddf5\ud83d\udc47",
+    "url": "https://nitter.net/TimBeiko/status/1907856855596158982#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1907856855596158982#m",
+      "timestamp_text": "Apr 3",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:21:38.876328"
+}

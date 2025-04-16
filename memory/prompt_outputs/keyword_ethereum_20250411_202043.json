@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1895801873896259819#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "What Ethereum needs is a lot of young blood who shared the cypherpunk vision. \n\nAll OGs are jaded. \n\nIt\u2019s on the next generation now.",
+    "url": "https://nitter.net/VitalikButerin/status/1895801873896259819#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1895801873896259819#m",
+      "timestamp_text": "Mar 1",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:20:43.150048"
+}

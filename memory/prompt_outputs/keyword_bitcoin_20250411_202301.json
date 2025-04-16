@@ -1,0 +1,25 @@
+{
+  "keyword": "bitcoin",
+  "content": {
+    "id": "reddit_1jwlfmj",
+    "source": "reddit",
+    "title": "Grayscale and Osprey end 2-year legal fight over Bitcoin ETF promotion",
+    "content": "",
+    "author": "Abdeliq",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwlfmj/grayscale_and_osprey_end_2year_legal_fight_over/",
+    "score": 6,
+    "num_comments": 2,
+    "created_utc": 1744362332.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwlfmj",
+      "upvote_ratio": 0.88,
+      "is_self": false,
+      "domain": "cointelegraph.com",
+      "link_flair_text": "\ud83d\udd34 UNRELIABLE SOURCE",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:23:01.869391"
+}

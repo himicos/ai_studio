@@ -1,0 +1,18 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "twitter_1895598956375400746#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "Check out the deep funding round here!\n\ncryptopond.xyz/modelfactory/\u2026",
+    "url": "https://nitter.net/VitalikButerin/status/1895598956375400746#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1895598956375400746#m",
+      "timestamp_text": "Feb 28",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:20:41.094063"
+}

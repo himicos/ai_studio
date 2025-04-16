@@ -1,0 +1,25 @@
+{
+  "keyword": "bitcoin",
+  "content": {
+    "id": "reddit_1jwoii5",
+    "source": "reddit",
+    "title": "\u2018Confidence Crisis\u2019\u2014U.S. Dollar Price \u2018Collapse\u2019 Predicted To Ignite Bitcoin As Traders \u2018Sell America\u2019",
+    "content": "",
+    "author": "KIG45",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwoii5/confidence_crisisus_dollar_price_collapse/",
+    "score": 173,
+    "num_comments": 67,
+    "created_utc": 1744374107.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwoii5",
+      "upvote_ratio": 0.85,
+      "is_self": false,
+      "domain": "forbes.com",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:22:51.134624"
+}

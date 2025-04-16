@@ -1,0 +1,25 @@
+{
+  "keyword": "bitcoin",
+  "content": {
+    "id": "reddit_1jwsvyz",
+    "source": "reddit",
+    "title": "Sweden: proposal to include Bitcoin in national reserves",
+    "content": "",
+    "author": "hiorea",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwsvyz/sweden_proposal_to_include_bitcoin_in_national/",
+    "score": 31,
+    "num_comments": 4,
+    "created_utc": 1744385978.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwsvyz",
+      "upvote_ratio": 0.92,
+      "is_self": false,
+      "domain": "atlas21.com",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:22:41.907956"
+}

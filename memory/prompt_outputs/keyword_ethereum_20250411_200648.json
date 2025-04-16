@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1895806679704306130#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "We, the Ethereum Cypherpunks, act on principles. We fucking care about privacy. We fucking care about security. We fucking care about censorship resistance. And we will always fucking defend these core principles. I wrote the Ethereum Cypherpunk Manifesto because this shit matters. If you're butthurt, go touch some grass and get a reality check. We, the Ethereum Cypherpunks, stand united in our pursuit of a more private, secure, and censorship-resistant future. Like it or not.\nhackmd.io/@pcaversaccio/the-\u2026",
+    "url": "https://nitter.net/pcaversaccio/status/1895806679704306130#m",
+    "created_utc": 1744394795,
+    "metadata": {
+      "tweet_id": "1895806679704306130#m",
+      "timestamp_text": "Mar 1",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:06:48.060896"
+}

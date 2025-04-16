@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jwvkvm",
+    "source": "reddit",
+    "title": "U.S. Consumer Sentiment Craters in First Post-Tariff Read, but Crypto Is Holding Up",
+    "content": "",
+    "author": "KIG45",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwvkvm/us_consumer_sentiment_craters_in_first_posttariff/",
+    "score": 0,
+    "num_comments": 3,
+    "created_utc": 1744392715.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwvkvm",
+      "upvote_ratio": 0.33,
+      "is_self": false,
+      "domain": "coindesk.com",
+      "link_flair_text": "\ud83d\udfe2 GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:07:19.034921"
+}

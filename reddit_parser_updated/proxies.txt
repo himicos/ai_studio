@@ -1,0 +1,4 @@
+# Add your proxies here in the format: ip:port
+# Example:
+# 123.123.123.123:8080
+# 234.234.234.234:8080

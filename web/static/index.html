@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Studio Web Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .proxy-info {
+            transition: all 0.3s ease;
+        }
+        .proxy-info.updated {
+            background-color: #4ade80;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-4xl font-bold mb-8">AI Studio</h1>
+        
+        <!-- Proxy Information -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-2xl font-semibold mb-4">Proxy Status</h2>
+            <div id="proxyInfo" class="proxy-info p-4 bg-gray-50 rounded">
+                Loading proxy information...
+            </div>
+        </div>
+
+        <!-- Prompt Interface -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-2xl font-semibold mb-4">Process Prompt</h2>
+            <div class="space-y-4">
+                <textarea 
+                    id="promptInput" 
+                    class="w-full p-2 border rounded-md"
+                    rows="4"
+                    placeholder="Enter your prompt here..."
+                ></textarea>
+                <div class="flex items-center space-x-2">
+                    <input type="checkbox" id="bumpPrompts" checked>
+                    <label for="bumpPrompts">Enable prompt variations</label>
+                </div>
+                <button 
+                    onclick="processPrompt()"
+                    class="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600"
+                >
+                    Process
+                </button>
+            </div>
+            <div id="promptResponse" class="mt-4 p-4 bg-gray-50 rounded hidden">
+                <pre class="whitespace-pre-wrap"></pre>
+            </div>
+        </div>
+
+        <!-- Memory Insights -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-2xl font-semibold mb-4">Memory Insights</h2>
+            <div id="insights" class="space-y-4">
+                Loading insights...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebSocket connection
+        const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws`);
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'proxy_update') {
+                updateProxyInfo(data.data);
+            }
+        };
+
+        // Update proxy information
+        function updateProxyInfo(data) {
+            const proxyInfo = document.getElementById('proxyInfo');
+            proxyInfo.innerHTML = `
+                <div class="font-mono">
+                    <div class="mb-2"><strong>Proxy:</strong> ${JSON.stringify(data.proxy, null, 2)}</div>
+                    <div><strong>User Agent:</strong> ${data.user_agent}</div>
+                </div>
+            `;
+            proxyInfo.classList.add('updated');
+            setTimeout(() => proxyInfo.classList.remove('updated'), 1000);
+        }
+
+        // Process prompt
+        async function processPrompt() {
+            const promptInput = document.getElementById('promptInput');
+            const bumpPrompts = document.getElementById('bumpPrompts');
+            const promptResponse = document.getElementById('promptResponse');
+            
+            try {
+                const response = await fetch('/prompt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        prompt: promptInput.value,
+                        bump_prompts: bumpPrompts.checked
+                    }),
+                });
+                
+                const data = await response.json();
+                promptResponse.classList.remove('hidden');
+                promptResponse.querySelector('pre').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('Error:', error);
+                promptResponse.classList.remove('hidden');
+                promptResponse.querySelector('pre').textContent = `Error: ${error.message}`;
+            }
+        }
+
+        // Load insights
+        async function loadInsights() {
+            try {
+                const response = await fetch('/memory/insights');
+                const data = await response.json();
+                const insights = document.getElementById('insights');
+                
+                if (data.insights && data.insights.length > 0) {
+                    insights.innerHTML = data.insights.map(insight => `
+                        <div class="p-4 bg-gray-50 rounded">
+                            <div class="font-semibold">${insight.topic}</div>
+                            <div class="mt-2">${insight.content}</div>
+                            <div class="mt-2 text-sm text-gray-500">
+                                ${new Date(insight.timestamp * 1000).toLocaleString()}
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    insights.innerHTML = 'No insights available.';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('insights').innerHTML = 'Error loading insights.';
+            }
+        }
+
+        // Initial load
+        loadInsights();
+    </script>
+</body>
+</html>

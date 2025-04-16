@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1905733092662505586#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "A simple L2 security and finalization roadmap\n\nethereum-magicians.org/t/a-s\u2026",
+    "url": "https://nitter.net/VitalikButerin/status/1905733092662505586#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1905733092662505586#m",
+      "timestamp_text": "Mar 28",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:21:36.276583"
+}

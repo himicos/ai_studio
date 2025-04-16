@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jww718",
+    "source": "reddit",
+    "title": "New York State Drops a Crypto Bomb: New Bill Proposes Accepting Ethereum &amp; More for Government Payments",
+    "content": "",
+    "author": "kirtash93",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jww718/new_york_state_drops_a_crypto_bomb_new_bill/",
+    "score": 19,
+    "num_comments": 15,
+    "created_utc": 1744394266.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jww718",
+      "upvote_ratio": 0.76,
+      "is_self": false,
+      "domain": "reddit.com",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:22:19.900179"
+}

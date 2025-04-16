@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1907856855596158982#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "Reconfiguring AllCoreDevs \n\nTo deliver on Ethereum's ambitious L1 roadmap, we should decouple planning and execution. To that end, I'm proposing we reorient ACD to focus on scoping future forks, and elevate our existing testing calls as the main venue for the current ones. \n\n\ud83e\uddf5\ud83d\udc47",
+    "url": "https://nitter.net/TimBeiko/status/1907856855596158982#m",
+    "created_utc": 1744395747,
+    "metadata": {
+      "tweet_id": "1907856855596158982#m",
+      "timestamp_text": "Apr 3",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Vitalik Buterin, the co-founder of Ethereum, has proposed a reconfiguration of the AllCoreDevs (ACD) meetings to better align with Ethereum's Layer 1 (L1) roadmap. He suggests separating the planning and execution phases. The ACD should focus more on scoping future forks, while existing testing calls should be emphasized as the primary platform for discussing current forks. This approach aims to streamline the development process and enhance the efficiency of Ethereum's progress.",
+  "timestamp": "2025-04-11T20:22:53.085767"
+}

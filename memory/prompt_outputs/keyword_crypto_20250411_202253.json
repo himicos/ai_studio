@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jwnazi",
+    "source": "reddit",
+    "title": "NFT trader sells Alien CryptoPunks at $10M loss as sales drop 41% in 30 days",
+    "content": "",
+    "author": "hiorea",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwnazi/nft_trader_sells_alien_cryptopunks_at_10m_loss_as/",
+    "score": 21,
+    "num_comments": 8,
+    "created_utc": 1744370021.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwnazi",
+      "upvote_ratio": 0.87,
+      "is_self": false,
+      "domain": "cryptopolitan.com",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:22:53.113783"
+}

@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jwosur",
+    "source": "reddit",
+    "title": "New York bill proposes legalizing crypto for state payments",
+    "content": "",
+    "author": "Livid_Yam",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwosur/new_york_bill_proposes_legalizing_crypto_for/",
+    "score": 14,
+    "num_comments": 2,
+    "created_utc": 1744375001.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwosur",
+      "upvote_ratio": 1.0,
+      "is_self": false,
+      "domain": "cointelegraph.com",
+      "link_flair_text": "\ud83d\udd34 UNRELIABLE SOURCE",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:07:38.476406"
+}

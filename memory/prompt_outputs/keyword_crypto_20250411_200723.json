@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jwp8bv",
+    "source": "reddit",
+    "title": "~$70,000 Crypto Coding Competition",
+    "content": "The Monero community is excited to announce the launch of the FCMP++ (Full-Chain Membership Proofs) Optimization Coding Competition!\n\nSee all contest details [here](https://github.com/j-berman/fcmp-plus-plus-optimization-competition).\n\n## What is FCMP++?\n\nFCMP++ is one of the most significant privacy enhancements to Monero since its inception. This upgrade would improve sender-privacy from 1 in 16 to 1 in over 150 million while maintaining compatibility with existing wallets and addresses! \n\n## About the Competition\n\nWe're looking to optimize the performance of two critical libraries used in FCMP++ ([`helioselene`](https://github.com/kayabaNerve/fcmp-plus-plus/tree/78754718faa21f0a5751fbd30c9495d7f7f5c2b1/crypto/helioselene) and [`ec-divisors`](https://github.com/kayabaNerve/fcmp-plus-plus/tree/78754718faa21f0a5751fbd30c9495d7f7f5c2b1/crypto/divisors)). This is your chance to make a direct contribution to Monero's future while competing for 350xmr (~$70,000 at time of writing) in rewards and global recognition.\n\n## Competition Details\n\n- **Timeline**: Competition runs from April 28th to June 30th, 2025\n- **Focus Area**: elliptic curve arithmetic\n- **Submission Requirements**: detailed [here](https://github.com/j-berman/fcmp-plus-plus-optimization-competition)\n- **Judging Criteria**: Speed improvement and memory management\n\n## How to Enter\n\n1. Review the competition details and rules at: https://github.com/j-berman/fcmp-plus-plus-optimization-competition\n2. Clone [the repository](https://github.com/j-berman/fcmp-plus-plus-optimization-competition) and familiarize yourself with the codebase\n3. Submit your optimized implementation to a private repository according to the guidelines in the README\n\n## Resources\n\n- Official Competition GitHub: https://github.com/j-berman/fcmp-plus-plus-optimization-competition\n- Competition Blog Post: https://www.getmonero.org/2025/04/05/fcmp++-contest.html\n- FCMP++ Technical Background: https://www.getmonero.org/2024/04/27/fcmps.html\n\nJoin us in shaping the future of financial privacy! \n\nQuestions? Join #monero-dev on [matrix](https://matrix.to/#/%23monero-dev:monero.social?via=matrix.org) or [irc](irc://irc.libera.chat/#monero-dev) or reach out through the competition GitHub repository.",
+    "author": "ACK-J-Github",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwp8bv/70000_crypto_coding_competition/",
+    "score": 8,
+    "num_comments": 0,
+    "created_utc": 1744376291.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwp8bv",
+      "upvote_ratio": 1.0,
+      "is_self": true,
+      "domain": "self.CryptoCurrency",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:07:23.567209"
+}

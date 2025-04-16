@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1895856424259108957#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "bullish ethereum\n\ncongrats @tkstanczak, @hwwonx , @dannyryan, @VitalikButerin :)",
+    "url": "https://nitter.net/drakefjustin/status/1895856424259108957#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1895856424259108957#m",
+      "timestamp_text": "Mar 1",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:21:33.862018"
+}

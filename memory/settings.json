@@ -1,0 +1,41 @@
+{
+  "proxies": [
+    {
+      "url": "181.215.152.84:8870:user97564:j5d6yp",
+      "username": null,
+      "password": null,
+      "location": null,
+      "tags": []
+    },
+    {
+      "url": "171.22.76.248:6977:user97564:j5d6yp",
+      "username": null,
+      "password": null,
+      "location": null,
+      "tags": []
+    }
+  ],
+  "twitter": {
+    "accounts": [],
+    "keywords": [],
+    "scan_interval": 300
+  },
+  "reddit": {
+    "subreddits": [],
+    "scan_interval": 300
+  },
+  "models": {
+    "default_model": "gpt4o",
+    "available_models": [
+      "gpt4o",
+      "claude",
+      "grok",
+      "manus"
+    ]
+  },
+  "system": {
+    "bump_prompts": true,
+    "scan_interval": 300,
+    "log_level": "INFO"
+  }
+}

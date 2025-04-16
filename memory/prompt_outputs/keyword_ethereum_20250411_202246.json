@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1895843332363808924#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "\ud83d\udd25PEEPanEIP-7706: Separate gas type for calldata\ud83d\udd25\n@VitalikButerin joined #PEEPanEIP with @EthCatHerders to share about #EIP7706. If you missed it, here\u2019s your chance to catch up! \n\ud83c\udfa5 piped.video/watch?v=c3TV6Ohj\u2026\n\nThanks to everyone who joined and especially @Gajpower @robocopsgonemad @ncsgy for adding questions for additional clarifications. \n\n\ud83e\uddf5 Let\u2019s break down the key points again! \ud83d\udc47\n\n#Ethereum #gas #Calldata #Rollups #Layer2",
+    "url": "https://nitter.net/poojaranjan19/status/1895843332363808924#m",
+    "created_utc": 1744395747,
+    "metadata": {
+      "tweet_id": "1895843332363808924#m",
+      "timestamp_text": "Mar 1",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Vitalik Buterin participated in a discussion about EIP-7706, which proposes a separate gas type for calldata. This was part of the PEEPanEIP series with EthCatHerders. The session, which can be rewatched on piped.video, included contributions from community members like Gajpower, robocopsgonemad, and ncsgy, who provided additional questions for clarification. The discussion focused on topics related to Ethereum, gas, calldata, rollups,",
+  "timestamp": "2025-04-11T20:22:46.194526"
+}

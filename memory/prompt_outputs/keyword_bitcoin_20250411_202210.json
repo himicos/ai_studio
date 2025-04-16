@@ -1,0 +1,25 @@
+{
+  "keyword": "bitcoin",
+  "content": {
+    "id": "reddit_1jwerkz",
+    "source": "reddit",
+    "title": "MicroStrategy admits it might need to sell bitcoin by 2026",
+    "content": "The ponzi is starting to crumble.",
+    "author": "Quixotus",
+    "url": "https://www.reddit.com/r/wallstreetbets/comments/1jwerkz/microstrategy_admits_it_might_need_to_sell/",
+    "score": 2358,
+    "num_comments": 262,
+    "created_utc": 1744336461.0,
+    "metadata": {
+      "subreddit": "wallstreetbets",
+      "post_id": "1jwerkz",
+      "upvote_ratio": 0.94,
+      "is_self": false,
+      "domain": "protos.com",
+      "link_flair_text": "News",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:22:10.297862"
+}

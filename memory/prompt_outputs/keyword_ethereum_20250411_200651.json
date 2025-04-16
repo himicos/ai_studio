@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1895856424259108957#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "bullish ethereum\n\ncongrats @tkstanczak, @hwwonx , @dannyryan, @VitalikButerin :)",
+    "url": "https://nitter.net/drakefjustin/status/1895856424259108957#m",
+    "created_utc": 1744394795,
+    "metadata": {
+      "tweet_id": "1895856424259108957#m",
+      "timestamp_text": "Mar 1",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:06:51.961848"
+}

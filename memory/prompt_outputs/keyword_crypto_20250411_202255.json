@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jwn4ha",
+    "source": "reddit",
+    "title": "Getting back into crypto",
+    "content": "Now that the market took a little dip (ik not much) but i figured id start with $250 of bitcoin. I sold all of my various crypto when bitcoin got over 100k and am stuck with like $50 worth of matic and atom. Should i go the basic route and stick to btc and eth or branch out to sol ltc avalanche etc? Budget is ab $700 a month. Is see sol is around half what it peaked at as well so definitely going with that to. Thats it. 500Character extension:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+    "author": "zachjones505",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwn4ha/getting_back_into_crypto/",
+    "score": 1,
+    "num_comments": 15,
+    "created_utc": 1744369358.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwn4ha",
+      "upvote_ratio": 0.52,
+      "is_self": true,
+      "domain": "self.CryptoCurrency",
+      "link_flair_text": "ADVICE",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:22:55.494262"
+}

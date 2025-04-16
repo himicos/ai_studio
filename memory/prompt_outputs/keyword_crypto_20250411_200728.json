@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jwu9et",
+    "source": "reddit",
+    "title": "Live: SEC Crypto Task Force Roundtable 1PM EST",
+    "content": "",
+    "author": "TCr0wn",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwu9et/live_sec_crypto_task_force_roundtable_1pm_est/",
+    "score": 2,
+    "num_comments": 2,
+    "created_utc": 1744389422.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwu9et",
+      "upvote_ratio": 0.75,
+      "is_self": false,
+      "domain": "youtube.com",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:07:28.094412"
+}

@@ -1,0 +1,25 @@
+{
+  "keyword": "bitcoin",
+  "content": {
+    "id": "reddit_1jwpcj8",
+    "source": "reddit",
+    "title": "As Schiff calls Bitcoin\u2019s death, a Bloomberg analyst sees the S&amp;P now mirroring its chaos",
+    "content": "",
+    "author": "goldyluckinblokchain",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jwpcj8/as_schiff_calls_bitcoins_death_a_bloomberg/",
+    "score": 15,
+    "num_comments": 5,
+    "created_utc": 1744376621.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jwpcj8",
+      "upvote_ratio": 0.86,
+      "is_self": false,
+      "domain": "crypto.news",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:07:36.404210"
+}

@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1895843332363808924#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "\ud83d\udd25PEEPanEIP-7706: Separate gas type for calldata\ud83d\udd25\n@VitalikButerin joined #PEEPanEIP with @EthCatHerders to share about #EIP7706. If you missed it, here\u2019s your chance to catch up! \n\ud83c\udfa5 piped.video/watch?v=c3TV6Ohj\u2026\n\nThanks to everyone who joined and especially @Gajpower @robocopsgonemad @ncsgy for adding questions for additional clarifications. \n\n\ud83e\uddf5 Let\u2019s break down the key points again! \ud83d\udc47\n\n#Ethereum #gas #Calldata #Rollups #Layer2",
+    "url": "https://nitter.net/poojaranjan19/status/1895843332363808924#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1895843332363808924#m",
+      "timestamp_text": "Mar 1",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:21:31.445367"
+}

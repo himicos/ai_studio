@@ -1,0 +1,25 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "reddit_1jww718",
+    "source": "reddit",
+    "title": "New York State Drops a Crypto Bomb: New Bill Proposes Accepting Ethereum &amp; More for Government Payments",
+    "content": "",
+    "author": "kirtash93",
+    "url": "https://www.reddit.com/r/CryptoCurrency/comments/1jww718/new_york_state_drops_a_crypto_bomb_new_bill/",
+    "score": 10,
+    "num_comments": 6,
+    "created_utc": 1744394266.0,
+    "metadata": {
+      "subreddit": "CryptoCurrency",
+      "post_id": "1jww718",
+      "upvote_ratio": 0.86,
+      "is_self": false,
+      "domain": "reddit.com",
+      "link_flair_text": "GENERAL-NEWS",
+      "platform": "reddit"
+    }
+  },
+  "summary": "Error generating summary: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "timestamp": "2025-04-11T20:07:12.923676"
+}

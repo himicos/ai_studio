@@ -8,16 +8,30 @@ This module extends the database operations for AI Studio to include:
 - Advanced querying capabilities
 """
 
-import os
-import sqlite3
+# Standard library imports
 import json
 import logging
-import numpy as np
+import os
+import sqlite3
+import uuid
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple, Union
-from sentence_transformers import SentenceTransformer
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any, Union
+
+# Third-party imports
+import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-import asyncio # Make sure asyncio is imported
+from sentence_transformers import SentenceTransformer
+
+# Internal imports
+from ai_studio_package.infra.models import load_embedding_model
+from ai_studio_package.infra.vector_adapter import (
+    USE_FAISS_VECTOR_STORE, 
+    dual_write_enabled,
+    get_vector_store,
+    search_similar_nodes_faiss,
+    generate_embedding_for_node_faiss
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -32,6 +46,16 @@ VECTOR_DB_PATH = os.path.join("memory", "vectors.sqlite")
 embedding_model_name = 'all-MiniLM-L6-v2' 
 embedding_model = SentenceTransformer(embedding_model_name)
 embedding_dimensions = 384 # Specify dimensions for MiniLM-L6-v2
+
+# Import the vector adapter
+from ai_studio_package.infra.vector_adapter import (
+    search_similar_nodes_faiss, 
+    generate_embedding_for_node_faiss,
+    dual_write_enabled
+)
+
+# Add a flag to control which vector store to use
+USE_FAISS_VECTOR_STORE = True  # Can be controlled by env var later
 
 def get_db_connection():
     """
@@ -1381,79 +1405,140 @@ def get_memory_edges(
 
 # Vector Embedding Functions
 
-def generate_embedding_for_node(node_id: str) -> bool:
+def search_similar_nodes(query_text: str, limit: int = 10, node_type: Optional[str] = None, min_similarity: float = 0.5) -> List[Dict]:
     """
-    Generate and store embedding for a memory node using a sentence transformer.
+    Search for nodes similar to the given query text.
     
     Args:
-        node_id (str): Node ID from memory_nodes table.
+        query_text: The query text to search for similar nodes.
+        limit: The maximum number of similar nodes to return.
+        node_type: Optional filter for node type.
+        min_similarity: Minimum similarity score (0-1) for a node to be included in results.
         
     Returns:
-        bool: True if successful, False otherwise.
+        A list of similar nodes, ordered by similarity (highest first).
     """
-    conn_main = None
-    try:
-        # 1. Get node content from main DB
-        node = get_memory_node(node_id)
-        if not node or not node.get('content'):
-            logger.error(f"Node {node_id} not found or has no content for embedding.")
-            return False
-        
-        node_content = node['content']
-        logger.debug(f"Generating embedding for node {node_id}...")
-
-        # 2. Generate embedding (using the globally loaded model)
-        embedding = embedding_model.encode(node_content, convert_to_numpy=True)
-        
-        # Ensure it's float32 for consistent storage
-        if embedding.dtype != np.float32:
-            embedding = embedding.astype(np.float32)
-            
-        embedding_bytes = embedding.tobytes()
-        
-        # 3. Store embedding in vector DB
-        conn_vec = get_vector_db_connection()
-        cursor_vec = conn_vec.cursor()
-        
-        cursor_vec.execute('''
-        INSERT OR REPLACE INTO embeddings (
-            node_id, embedding, model, dimensions, created_at
-        ) VALUES (?, ?, ?, ?, ?)
-        ''', (
-            node_id,
-            embedding_bytes,
-            embedding_model_name, 
-            embedding_dimensions,
-            int(datetime.now().timestamp())
-        ))
-        conn_vec.commit()
-        logger.debug(f"Stored embedding for node {node_id} in vector DB.")
-
-        # 4. Update flag in main DB
-        conn_main = get_db_connection()
-        cursor_main = conn_main.cursor()
-        
-        cursor_main.execute('''
-        UPDATE memory_nodes SET has_embedding = 1, updated_at = ? WHERE id = ?
-        ''', (int(datetime.now().timestamp()), node_id))
-        
-        conn_main.commit()
-        logger.info(f"Successfully generated and stored embedding for node {node_id}.")
-        return True
+    if USE_FAISS_VECTOR_STORE:
+        try:
+            return search_similar_nodes_faiss(query_text, limit=limit, node_type=node_type, min_similarity=min_similarity)
+        except Exception as e:
+            logging.error(f"Error using FAISS vector store: {e}")
+            # Fall back to SQLite if FAISS fails
+            logging.info("Falling back to SQLite vector search")
     
+    # Original SQLite-based search logic
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Get the embedding for the query text
+    emb_model = load_embedding_model()
+    query_embedding = emb_model.encode(query_text)
+    
+    try:
+        # Fetch nodes with embeddings
+        if node_type:
+            cursor.execute("SELECT * FROM nodes WHERE embedding IS NOT NULL AND type = ?", (node_type,))
+        else:
+            cursor.execute("SELECT * FROM nodes WHERE embedding IS NOT NULL")
+        
+        nodes = cursor.fetchall()
+        conn.close()
+        
+        if not nodes:
+            return []
+        
+        similar_nodes = []
+        for node in nodes:
+            node_embedding = np.array(json.loads(node['embedding']))
+            
+            # Calculate cosine similarity
+            similarity = float(cosine_similarity([query_embedding], [node_embedding])[0][0])
+            
+            if similarity >= min_similarity:
+                node_dict = dict(node)
+                node_dict['similarity'] = similarity
+                similar_nodes.append(node_dict)
+        
+        # Sort by similarity (highest first) and limit results
+        similar_nodes.sort(key=lambda x: x['similarity'], reverse=True)
+        return similar_nodes[:limit]
+        
     except Exception as e:
-        logger.error(f"Error generating embedding for node {node_id}: {e}", exc_info=True)
-        # Rollback transactions if they were started
-        if conn_main and conn_main.in_transaction: conn_main.rollback()
+        logging.error(f"Error in search_similar_nodes: {e}")
+        if conn:
+            conn.close()
+        return []
+
+def generate_embedding_for_node(node_id: str) -> bool:
+    """
+    Generate and store an embedding for a node with the given ID.
+    Will use FAISS if enabled, otherwise will store in SQLite.
+    If dual-write is enabled, will store in both.
+    
+    Args:
+        node_id: The ID of the node to generate an embedding for
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    from ai_studio_package.infra.settings import get_settings
+    settings = get_settings()
+    
+    if not node_id:
+        logging.error("Invalid node_id provided to generate_embedding_for_node")
+        return False
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Get the node
+        cursor.execute("SELECT id, content FROM memory_nodes WHERE id = ?", (node_id,))
+        node = cursor.fetchone()
+        
+        if not node:
+            logging.error(f"Node {node_id} not found")
+            return False
+            
+        content = node[1]
+        if not content:
+            logging.error(f"Node {node_id} has no content")
+            return False
+            
+        # Generate the embedding
+        from ai_studio_package.ml.models import get_model
+        embedding_model = get_model('embedding')
+        
+        embedding = embedding_model.get_embeddings([content])[0]
+        
+        # Store the embedding appropriately based on settings
+        success = True
+        
+        # If using FAISS, store there
+        if settings.use_faiss_vector_store:
+            faiss_success = generate_embedding_for_node_faiss(node_id, content, embedding)
+            success = success and faiss_success
+            
+            # If FAISS only (not dual write), we're done
+            if not settings.dual_write_embeddings:
+                return success
+        
+        # Store in SQLite if using SQLite or dual write
+        embedding_json = json.dumps(embedding.tolist())
+        cursor.execute(
+            "UPDATE memory_nodes SET embedding = ? WHERE id = ?",
+            (embedding_json, node_id)
+        )
+        conn.commit()
+        
+        logging.info(f"Generated and stored embedding for node {node_id}")
+        return success
+    except Exception as e:
+        logging.error(f"Error generating embedding for node {node_id}: {e}")
         return False
     finally:
-        # Ensure connections opened in this function are closed
-        if conn_main:
-            try: conn_main.close() 
-            except: pass
-        if conn_vec:
-            try: conn_vec.close()
-            except: pass
+        if conn:
+            conn.close()
 
 def get_embedding(node_id: str) -> Optional[np.ndarray]:
     """
@@ -1491,175 +1576,62 @@ def get_embedding(node_id: str) -> Optional[np.ndarray]:
         logger.error(f"Error getting embedding: {e}")
         return None
 
-def search_similar_nodes(
-    query_text: str,
-    limit: int = 10,
-    node_type: Optional[str] = None,
-    min_similarity: float = 0.7
-) -> List[Dict[str, Any]]:
+def regenerate_all_embeddings(force=False):
     """
-    Search for memory nodes semantically similar to the query text using vector embeddings.
+    Clear existing embeddings and regenerate them for all memory nodes.
     
-    Args:
-        query_text (str): Query text.
-        limit (int): Maximum number of results.
-        node_type (str, optional): Filter results by node type AFTER similarity search.
-        min_similarity (float): Minimum cosine similarity score (0 to 1).
-        
-    Returns:
-        list: List of node dictionaries with 'similarity' score included, sorted by similarity.
+    This function has been enhanced to support FAISS vector store.
     """
-    conn_vec = None
-    conn_main = None
     try:
-        # 1. Generate query embedding
-        if not query_text:
-            return []
-            
-        query_embedding = embedding_model.encode([query_text], convert_to_numpy=True)
+        logger.info("Regenerating all embeddings...")
         
-        # Ensure correct shape (1, dimensions) for cosine_similarity
-        if query_embedding.ndim == 1:
-             query_embedding = query_embedding.reshape(1, -1)
-             
-        if query_embedding.dtype != np.float32:
-             query_embedding = query_embedding.astype(np.float32)
-
-        # 2. Fetch all embeddings from vector DB
-        conn_vec = get_vector_db_connection()
-        cursor_vec = conn_vec.cursor()
+        # Start database operations to mark all nodes for re-embedding
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        # Fetch node_id, embedding BLOB, and dimensions
-        cursor_vec.execute("SELECT node_id, embedding, dimensions FROM embeddings")
-        all_embeddings_data = cursor_vec.fetchall()
-        conn_vec.close() # Close connection after fetching
-
-        if not all_embeddings_data:
-            logger.info("No embeddings found in the vector database.")
-            return []
-
-        # 3. Decode embeddings and calculate similarity
-        node_ids = []
-        stored_embeddings_list = []
+        # Clear the has_embedding flag for all nodes to force regeneration
+        cursor.execute("UPDATE memory_nodes SET has_embedding = 0 WHERE TRUE")
+        conn.commit()
         
-        for row in all_embeddings_data:
-            node_id = row['node_id']
-            embedding_bytes = row['embedding']
-            dimensions = row['dimensions'] # Use stored dimension
-            
-            # Decode BLOB to numpy array
-            try:
-                 stored_embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
-                 # Basic sanity check for dimensions
-                 if stored_embedding.size == dimensions:
-                      stored_embeddings_list.append(stored_embedding.reshape(1, -1)) # Reshape for cosine_similarity
-                      node_ids.append(node_id)
-                 else:
-                      logger.warning(f"Dimension mismatch for node {node_id}. Expected {dimensions}, got {stored_embedding.size}. Skipping.")
-            except Exception as decode_err:
-                 logger.error(f"Error decoding embedding for node {node_id}: {decode_err}")
-
-
-        if not stored_embeddings_list:
-             logger.warning("No valid embeddings decoded.")
-             return []
-
-        # Stack embeddings into a single numpy array for efficient calculation
-        stored_embeddings_matrix = np.vstack(stored_embeddings_list)
-
-        # Calculate cosine similarities
-        similarities = cosine_similarity(query_embedding, stored_embeddings_matrix)[0] # Get the 1D array of scores
-
-        # >>> ADD LOGGING <<<
-        logger.debug(f"Semantic search received min_similarity threshold: {min_similarity}")
-        logger.debug(f"Calculated scores (Top 5): {sorted(similarities, reverse=True)[:5]}") 
-
-        # 4. Combine node IDs with scores, filter, and sort
-        results = []
-        for node_id, score in zip(node_ids, similarities):
-            # >>> ADD LOGGING <<<
-            logger.debug(f"Checking node {node_id}: score={score:.4f} >= threshold={min_similarity}? {score >= min_similarity}")
-            if score >= min_similarity:
-                results.append({'node_id': node_id, 'similarity': float(score)}) # Store as float
-
-        # Sort by similarity descending
-        results.sort(key=lambda x: x['similarity'], reverse=True)
-
-        # Apply limit
-        top_results = results[:limit]
-
-        if not top_results:
-            logger.info(f"No nodes found with similarity >= {min_similarity} for query.")
-            return []
-            
-        top_node_ids = [res['node_id'] for res in top_results]
-        similarity_map = {res['node_id']: res['similarity'] for res in top_results}
-
-        # 5. Fetch node details from main DB for the top node IDs
-        conn_main = get_db_connection()
-        cursor_main = conn_main.cursor()
+        # Get all nodes that need embeddings
+        cursor.execute("SELECT id FROM memory_nodes WHERE content IS NOT NULL AND content != ''")
+        node_ids = [row['id'] for row in cursor.fetchall()]
+        conn.close()
         
-        # Prepare placeholder string for IN clause
-        placeholders = ','.join('?' * len(top_node_ids))
-        query = f"SELECT * FROM memory_nodes WHERE id IN ({placeholders})"
+        logger.info(f"Found {len(node_ids)} nodes that need embeddings.")
         
-        # Optionally add node_type filter to the main query
-        params = top_node_ids
-        if node_type:
-            query += " AND type = ?"
-            params.append(node_type)
-            
-        cursor_main.execute(query, params)
-        nodes_data = cursor_main.fetchall()
-        conn_main.close() # Close main connection
-
-        # 6. Combine node data with similarity scores and parse JSON fields
-        final_results = []
-        for node_row in nodes_data:
-            node_dict = dict(node_row)
-            node_id = node_dict['id']
-            
-            # Parse tags JSON
-            if node_dict.get('tags'):
-                try:
-                    node_dict['tags'] = json.loads(node_dict['tags'])
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to decode tags JSON for node {node_id}")
-                    node_dict['tags'] = []
-            else:
-                node_dict['tags'] = []
-            
-            # Parse metadata JSON
-            if node_dict.get('metadata'):
-                try:
-                    node_dict['metadata'] = json.loads(node_dict['metadata'])
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to decode metadata JSON for node {node_id}")
-                    node_dict['metadata'] = {}
-            else:
-                node_dict['metadata'] = {}
-            
-            # Add similarity score
-            node_dict['similarity'] = similarity_map.get(node_id, 0.0) # Use .get just in case
-            
-            final_results.append(node_dict)
-
-        # Sort the final list by similarity again, as the DB fetch order isn't guaranteed
-        final_results.sort(key=lambda x: x['similarity'], reverse=True)
+        # If using FAISS, we should clear the FAISS index and rebuild it
+        if USE_FAISS_VECTOR_STORE and not dual_write_enabled():
+            from ai_studio_package.infra.vector_adapter import get_vector_store
+            # Force reinitialization of vector store
+            vector_store = get_vector_store(force_init=True)
+            logger.info("Initialized new FAISS vector store for regeneration.")
         
-        logger.info(f"Semantic search found {len(final_results)} similar nodes for query.")
-        return final_results
+        # Now process each node
+        success_count = 0
+        for node_id in node_ids:
+            if generate_embedding_for_node(node_id):
+                success_count += 1
+                
+            # Log progress periodically
+            if success_count % 100 == 0:
+                logger.info(f"Generated {success_count}/{len(node_ids)} embeddings")
+        
+        # Final log
+        logger.info(f"Embedding regeneration complete. Generated {success_count}/{len(node_ids)} embeddings")
+        
+        return {
+            "total_nodes": len(node_ids),
+            "embeddings_generated": success_count
+        }
     
     except Exception as e:
-        logger.error(f"Error during semantic search: {e}", exc_info=True)
-        # Ensure connections are closed on error
-        if conn_vec:
-            try: conn_vec.close() 
-            except: pass
-        if conn_main:
-            try: conn_main.close()
-            except: pass
-        return []
+        logger.error(f"Error regenerating embeddings: {e}")
+        return {
+            "error": str(e),
+            "total_nodes": 0,
+            "embeddings_generated": 0
+        }
 
 # Integration Functions
 
@@ -2099,177 +2071,6 @@ def get_twitter_feed(
 
 # === End Reddit Tracking Functions ===
 
-async def regenerate_all_embeddings(force_model_name: str = embedding_model_name):
-    """
-    Clears existing embeddings and regenerates them for all memory nodes.
-    Uses the globally defined embedding_model.
-
-    Args:
-        force_model_name: The model name to ensure is used for regeneration.
-                         Defaults to the globally defined embedding_model_name.
-    """
-    logger.info("Starting regeneration of all embeddings...")
-    conn_vec = None
-    conn_main = None
-    nodes_to_process = []
-    processed_count = 0
-    failed_count = 0
-
-    # Basic check to ensure the intended model is loaded
-    if embedding_model_name != force_model_name:
-         logger.warning(f"Current global model '{embedding_model_name}' differs from requested '{force_model_name}'. Ensure the correct model is loaded globally.")
-         # Depending on strictness, we could raise an error or just proceed with the global one.
-         # Let's proceed but log the warning prominently.
-
-    try:
-        # 1. Clear old embeddings from vector DB
-        conn_vec = get_vector_db_connection()
-        cursor_vec = conn_vec.cursor()
-        logger.info("Clearing existing embeddings from vectors.sqlite...")
-        cursor_vec.execute("DELETE FROM embeddings")
-        conn_vec.commit()
-        logger.info("Existing embeddings cleared.")
-        conn_vec.close() # Close vector connection for now
-
-        # 2. Mark all nodes for re-embedding in main DB and get IDs
-        conn_main = get_db_connection()
-        cursor_main = conn_main.cursor()
-        logger.info("Marking all memory nodes for re-embedding (has_embedding=0)...")
-        cursor_main.execute("UPDATE memory_nodes SET has_embedding = 0")
-        conn_main.commit()
-        logger.info("Memory nodes marked.")
-
-        logger.info("Fetching all node IDs to process...")
-        cursor_main.execute("SELECT id FROM memory_nodes")
-        nodes_to_process = [row['id'] for row in cursor_main.fetchall()]
-        logger.info(f"Found {len(nodes_to_process)} nodes to regenerate embeddings for.")
-        conn_main.close() # Close main connection for now
-
-        # 3. Iterate and regenerate
-        # Note: generate_embedding_for_node handles its own DB connections
-        logger.info("Beginning embedding generation loop...")
-        for i, node_id in enumerate(nodes_to_process):
-            logger.debug(f"Processing node {i+1}/{len(nodes_to_process)}: {node_id}")
-            # Assuming generate_embedding_for_node is synchronous as currently written
-            # If it were async, you would need: await generate_embedding_for_node(node_id)
-            success = generate_embedding_for_node(node_id)
-            if success:
-                processed_count += 1
-            else:
-                failed_count += 1
-            # Optional: add a small delay to avoid overwhelming resources if needed
-            # await asyncio.sleep(0.05) # Requires the function to be async
-
-        logger.info(f"Embedding regeneration complete. Success: {processed_count}, Failed: {failed_count}")
-
-    except Exception as e:
-        logger.error(f"Error during embedding regeneration: {e}", exc_info=True)
-        # Rollback potentially open transactions if error happened mid-operation
-        if conn_main and conn_main.in_transaction: conn_main.rollback()
-        if conn_vec and conn_vec.in_transaction: conn_vec.rollback()
-    finally:
-        # Ensure connections opened in this function are closed
-        if conn_main:
-            try: conn_main.close() 
-            except: pass
-        if conn_vec:
-            try: conn_vec.close()
-            except: pass
-
-def get_top_reddit_posts(conn, limit: int = 10, metric: str = 'score') -> List[Dict[str, Any]]:
-    """Retrieve the top N Reddit posts based on a specified metric."""
-    cursor = conn.cursor()
-    # Validate metric column
-    valid_metrics = ['score', 'num_comments', 'created_utc']
-    if metric not in valid_metrics:
-        metric = 'score' # Default to score
-
-    # Construct the query
-    query = f"""
-        SELECT 
-            id, subreddit, title, author, created_utc, score, upvote_ratio,
-            num_comments, permalink, url, selftext, is_self, is_video, 
-            over_18, spoiler, stickied, scraped_at, sentiment, sentiment_score, keywords
-        FROM reddit_posts
-        ORDER BY {metric} DESC
-        LIMIT ?
-    """
-
-    cursor.execute(query, (limit,))
-    rows = cursor.fetchall()
-    
-    # Convert rows to list of dictionaries
-    results = [dict(row) for row in rows]
-    # Deserialize JSON fields if needed (keywords?)
-    for result in results:
-        if result.get('keywords'):
-            try:
-                result['keywords'] = json.loads(result['keywords']) if isinstance(result['keywords'], str) else result['keywords']
-            except json.JSONDecodeError:
-                 logger.warning(f"Failed to decode keywords JSON for Reddit post {result.get('id')}")
-                 result['keywords'] = []
-        else:
-            result['keywords'] = []
-    return results
-
-def get_top_twitter_posts(conn, limit: int = 10, metric: str = 'retweet_count') -> List[Dict[str, Any]]:
-    """Retrieve the top N tweets based on a specified metric."""
-    cursor = conn.cursor()
-    # Validate metric column to prevent SQL injection
-    valid_metrics = ['engagement_retweets', 'engagement_likes', 'engagement_replies', 'score', 'date_posted']
-    if metric not in valid_metrics:
-        # Ensure default matches a valid DB column
-        metric = 'engagement_retweets' 
-
-    # Construct the query safely with JOIN
-    query = f"""
-        SELECT 
-            t.tweet_id, t.user_id, u.handle, t.content, t.date_posted, 
-            t.url, t.engagement_likes, t.engagement_retweets, t.engagement_replies,
-            t.sentiment, t.keywords, t.score
-        FROM tracked_tweets t
-        JOIN tracked_users u ON t.user_id = u.id
-        ORDER BY t.{metric} DESC 
-        LIMIT ?
-    """
-    
-    cursor.execute(query, (limit,))
-    rows = cursor.fetchall()
-    conn.row_factory = sqlite3.Row # Use row factory for dict access
-
-    # Convert rows to list of dictionaries using correct indices/names
-    results = []
-    for row in rows:
-        try:
-            engagement_dict = {
-                "likes": row['engagement_likes'] or 0,
-                "retweets": row['engagement_retweets'] or 0,
-                "replies": row['engagement_replies'] or 0
-            }
-            keywords_list = json.loads(row['keywords']) if row['keywords'] else []
-            # Construct full URL (assuming URL column stores path)
-            base_nitter_url = "https://nitter.net" 
-            partial_url = row['url'] 
-            full_url = f"{base_nitter_url}{partial_url}" if partial_url and partial_url.startswith('/') else partial_url
-
-            results.append({
-                "id": row['tweet_id'],
-                "user_id": row['user_id'],
-                "handle": row['handle'], # Get handle from JOIN
-                "content": row['content'],
-                "date_posted": str(row['date_posted']) if row['date_posted'] else None,
-                "url": full_url,
-                "sentiment": row['sentiment'],
-                "engagement": engagement_dict,
-                "keywords": keywords_list,
-                "score": row['score'] 
-            })
-        except Exception as parse_err:
-            logger.error(f"Error parsing tweet row for top posts (ID: {row.get('tweet_id', 'unknown')}): {parse_err}", exc_info=True)
-            continue # Skip faulty row
-
-    return results
-
 # Example usage
 if __name__ == "__main__":
     import asyncio # Make sure asyncio is imported
@@ -2304,3 +2105,52 @@ if __name__ == "__main__":
     # print(f"Test post stored: {success}")
     
     # print("Script finished.")
+
+def generate_embedding_for_node_faiss(node_id: str, text: str, embedding: np.ndarray) -> bool:
+    """
+    Store an embedding for a node in the FAISS vector store.
+    
+    Args:
+        node_id: The ID of the node
+        text: The text that was embedded
+        embedding: The embedding vector
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from ai_studio_package.infra.vector_adapter import get_vector_store
+        
+        # Get the vector store manager
+        vector_store = get_vector_store()
+        
+        # Create metadata for the node
+        metadata = {
+            "id": node_id,
+            "content": text[:200] + "..." if len(text) > 200 else text,  # Store a preview of the text
+            "created_at": int(datetime.now().timestamp())
+        }
+        
+        # Add the embedding to the vector store
+        success = vector_store.add_embedding(embedding, metadata)
+        
+        if success:
+            # Update the node in the main database to indicate it has an embedding
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE memory_nodes SET has_embedding = 1, updated_at = ? WHERE id = ?",
+                (int(datetime.now().timestamp()), node_id)
+            )
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Added embedding for node {node_id} to FAISS vector store")
+            return True
+        else:
+            logger.error(f"Failed to add embedding for node {node_id} to FAISS vector store")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Error adding embedding to FAISS for node {node_id}: {e}")
+        return False

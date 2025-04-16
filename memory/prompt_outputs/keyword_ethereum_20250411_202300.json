@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1910506160349921667#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "My own current privacy roadmap (much lighter on L1 changes, but also more limited in its consequences): ethereum-magicians.org/t/a-m\u2026\n\nHighly encourage people to read both!",
+    "url": "https://nitter.net/VitalikButerin/status/1910506160349921667#m",
+    "created_utc": 1744395747,
+    "metadata": {
+      "tweet_id": "1910506160349921667#m",
+      "timestamp_text": "16h",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Vitalik Buterin, co-founder of Ethereum, shared his current privacy roadmap on Twitter. He notes that his approach involves fewer changes at the Layer 1 (L1) level, which also means its effects are more limited. He encourages readers to explore the details on the Ethereum Magicians forum, suggesting there is more in-depth discussion available there. This roadmap is part of ongoing conversations about enhancing privacy within the Ethereum ecosystem.",
+  "timestamp": "2025-04-11T20:23:00.410882"
+}

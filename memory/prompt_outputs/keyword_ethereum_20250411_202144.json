@@ -1,0 +1,18 @@
+{
+  "keyword": "ethereum",
+  "content": {
+    "id": "twitter_1910506160349921667#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "My own current privacy roadmap (much lighter on L1 changes, but also more limited in its consequences): ethereum-magicians.org/t/a-m\u2026\n\nHighly encourage people to read both!",
+    "url": "https://nitter.net/VitalikButerin/status/1910506160349921667#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1910506160349921667#m",
+      "timestamp_text": "16h",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:21:44.173296"
+}

@@ -1,0 +1,18 @@
+{
+  "keyword": "crypto",
+  "content": {
+    "id": "twitter_1909191037161033735#m",
+    "source": "twitter",
+    "author": "vitalikbuterin",
+    "content": "Today's a good day to remember why we're here.\n\nWe're building the future of finance\u2014internet finance.\n\nUnstoppable global free trade, not trade wars.\nCredible neutrality, not entrenched interests.\nPermissionless innovation, not bureaucracy.\nUndebasable money, not money printers.\nSovereign individuals, not intermediaries.\nA multi-decade vision, not 4-year cycles.\nThe internet, not imperial superpowers.\nPositive-sum games, not rent-seeking.\nPeaceful revolutions, not warmongers.\nCryptography, not aircraft carriers.\nNetwork effects, not isolationism.\nFairness by design, not cronyism.\nOpen competition, not oligopoly.\nNetwork states, not nationalism.\nFrictionless markets, not tariffs.\nInnovators, not lobbyists.\nBuilders, not lawyers.\nDevs, not politicians.\n\nInternet finance is coming. It's built different. Believe in something.",
+    "url": "https://nitter.net/drakefjustin/status/1909191037161033735#m",
+    "created_utc": 1744395628,
+    "metadata": {
+      "tweet_id": "1909191037161033735#m",
+      "timestamp_text": "Apr 7",
+      "platform": "twitter"
+    }
+  },
+  "summary": "Error generating summary: object ChatCompletion can't be used in 'await' expression",
+  "timestamp": "2025-04-11T20:21:41.235526"
+}
