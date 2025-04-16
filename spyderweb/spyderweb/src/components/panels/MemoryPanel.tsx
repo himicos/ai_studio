@@ -5,7 +5,8 @@ import { PanelId } from "@/contexts/WorkspaceContext";
 import { 
   Network, Link, Zap, FileCode, 
   Plug, ArrowRight, Plus, Search, 
-  DatabaseBackup, FileJson, BrainCircuit
+  DatabaseBackup, FileJson, BrainCircuit, X,
+  BarChart, Clock, Activity, Filter
 } from "lucide-react";
 import {
   Card,
@@ -30,10 +31,21 @@ import {
   getMemoryNodes,
   getMemoryEdges,
   MemoryNode,
-  MemoryEdge
+  MemoryEdge,
+  NodeMetadata,
+  getNodeWeights,
+  trackNodeAccess
 } from "../../lib/api";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const sampleNodes = [
   { id: 'node1', label: 'Project Overview', type: 'document', connections: ['node2', 'node3'] },
@@ -46,6 +58,9 @@ const sampleNodes = [
 interface MemoryPanelProps {
   id: PanelId;
 }
+
+// Define node sizing modes
+type NodeSizingMode = 'uniform' | 'importance' | 'recency' | 'frequency';
 
 export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [activeTab, setActiveTab] = useState("connections");
@@ -67,6 +82,17 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [graphEdges, setGraphEdges] = useState<MemoryEdge[]>([]);
   const [isLoadingGraph, setIsLoadingGraph] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
+
+  // Add state for semantic highlighting
+  const [graphQuery, setGraphQuery] = useState("");
+  const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
+  const [isSearchingGraph, setIsSearchingGraph] = useState(false);
+  const [highlightIntensity, setHighlightIntensity] = useState<number>(0.7);
+  
+  // Add state for node weight/attention encoding
+  const [nodeWeights, setNodeWeights] = useState<Record<string, NodeMetadata>>({});
+  const [isLoadingWeights, setIsLoadingWeights] = useState(false);
+  const [nodeSizingMode, setNodeSizingMode] = useState<NodeSizingMode>('uniform');
 
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const [graphDimensions, setGraphDimensions] = useState({ width: 0, height: 0 });
@@ -106,6 +132,22 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     return undefined;
   }, [graphContainerRef, activeTab, updateGraphDimensions]);
 
+  // Add function to fetch node weights
+  const fetchNodeWeights = useCallback(async () => {
+    setIsLoadingWeights(true);
+    try {
+      const weights = await getNodeWeights();
+      setNodeWeights(weights);
+      console.log('[DEBUG] Fetched Node Weights:', weights);
+    } catch (error) {
+      console.error("Failed to fetch node weights:", error);
+      // Don't show a toast here to avoid annoying users if this is a background operation
+    } finally {
+      setIsLoadingWeights(false);
+    }
+  }, []);
+
+  // Modify the existing fetchGraphData function to also fetch weights
   const fetchGraphData = useCallback(async () => {
     setIsLoadingGraph(true);
     setGraphError(null);
@@ -120,6 +162,9 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       setGraphEdges(edgesResponse);
       if (nodesResponse.length > 0 || edgesResponse.length > 0) {
          toast.info(`Loaded ${nodesResponse.length} nodes and ${edgesResponse.length} edges.`);
+         
+         // Fetch node weights after graph data is loaded
+         fetchNodeWeights();
       }
     } catch (error) {
       console.error("[DEBUG] Failed to fetch graph data inside fetchGraphData:", error);
@@ -129,7 +174,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     } finally {
       setIsLoadingGraph(false);
     }
-  }, []);
+  }, [fetchNodeWeights]);
 
   useEffect(() => {
     if (activeTab === 'knowledge') {
@@ -247,17 +292,143 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     }
   };
 
+  // Add new function to handle semantic search within the graph
+  const handleGraphSearch = async () => {
+    if (!graphQuery.trim() || graphNodes.length === 0) return;
+    
+    setIsSearchingGraph(true);
+    try {
+      // Use the same API as semantic search panel
+      const payload: SemanticSearchRequestPayload = { 
+        query_text: graphQuery,
+        min_similarity: 0.3 // Lower threshold for graph visualization
+      };
+      const results = await searchMemoryNodes(payload);
+      
+      // Create a set of highlighted node IDs
+      const nodeIds = new Set(results.map(result => result.id));
+      setHighlightedNodes(nodeIds);
+      
+      if (results.length === 0) {
+        toast.info("No similar nodes found in the graph.");
+      } else {
+        toast.success(`Found ${results.length} related node(s) in the graph.`);
+      }
+    } catch (error) {
+      console.error("Graph semantic search failed:", error);
+      const errorMsg = error instanceof Error ? error.message : "An unknown error occurred.";
+      toast.error("Graph search failed", { description: errorMsg });
+    } finally {
+      setIsSearchingGraph(false);
+    }
+  };
+
+  // Clear highlights function
+  const clearHighlights = () => {
+    setHighlightedNodes(new Set());
+    setGraphQuery("");
+  };
+
+  // Function to calculate node size based on weight mode
+  const calculateNodeSize = useCallback((nodeId: string): number => {
+    const baseSize = 4; // Default base size
+    const minSize = 3;  // Minimum size
+    const maxSize = 10; // Maximum size
+    
+    if (nodeSizingMode === 'uniform') {
+      return baseSize;
+    }
+    
+    const metadata = nodeWeights[nodeId];
+    if (!metadata) {
+      return baseSize;
+    }
+    
+    let sizeFactor = 1;
+    
+    switch (nodeSizingMode) {
+      case 'importance':
+        sizeFactor = metadata.importance !== undefined ? metadata.importance : 1;
+        break;
+      case 'recency': {
+        // Calculate recency factor based on last accessed time
+        // More recent = larger
+        if (metadata.last_accessed) {
+          const now = Date.now() / 1000; // current time in seconds
+          const daysSinceAccess = (now - metadata.last_accessed) / (60 * 60 * 24);
+          // Exponential decay over time (1.0 to 0.1 over 30 days)
+          sizeFactor = Math.max(0.1, Math.exp(-daysSinceAccess / 30));
+        }
+        break;
+      }
+      case 'frequency':
+        // Scale by access count (default to 1 if missing)
+        sizeFactor = metadata.access_count !== undefined ? 
+          Math.min(3, 0.5 + (metadata.access_count / 10)) : 1;
+        break;
+    }
+    
+    // Apply size factor and clamp to min/max range
+    return Math.max(minSize, Math.min(maxSize, baseSize * sizeFactor));
+  }, [nodeSizingMode, nodeWeights]);
+
+  // Handle node click to update access tracking
+  const handleNodeClick = useCallback((node: any) => {
+    const nodeId = node.id as string;
+    
+    // Update local state
+    setNodeWeights(prev => {
+      const prevMetadata = prev[nodeId] || {};
+      const now = Date.now() / 1000; // current time in seconds
+      
+      return {
+        ...prev,
+        [nodeId]: {
+          ...prevMetadata,
+          last_accessed: now,
+          access_count: (prevMetadata.access_count || 0) + 1
+        }
+      };
+    });
+    
+    // Track the access on the server
+    trackNodeAccess({
+      node_id: nodeId,
+      access_type: 'view'
+    }).catch(error => {
+      console.error("Failed to track node access:", error);
+    });
+    
+    // Show node details
+    toast.info(`Node: ${node.label}`, {
+      description: node.fullContent,
+      duration: 5000
+    });
+  }, []);
+
+  // Modify the graphData object to include sizing information
   const graphData = {
-    nodes: graphNodes.map(node => ({
+    nodes: graphNodes.map(node => {
+      const isHighlighted = highlightedNodes.has(node.id);
+      return {
         id: node.id, 
         label: node.content.split('\n')[0].substring(0,30),
         fullContent: node.content,
         type: node.type,
-    })),
+        highlighted: isHighlighted,
+        color: isHighlighted ? 
+          (node.type === 'prompt' ? '#9333ea' : 
+           node.type === 'document' ? '#3b82f6' : 
+           '#10b981') : 
+          undefined,
+        // Add size information based on current mode
+        size: calculateNodeSize(node.id)
+      };
+    }),
     links: graphEdges.map(edge => ({ 
-        source: edge.source_node_id,
-        target: edge.target_node_id,
-        label: edge.label,
+      source: edge.source_node_id,
+      target: edge.target_node_id,
+      label: edge.label,
     }))
   };
 
@@ -556,8 +727,9 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
           </TabsContent>
 
           <TabsContent value="knowledge" className="grow shrink-0 overflow-hidden flex flex-col relative z-10 p-2">
-            {/* Compact Control Row - Moved higher and made more compact */}
-            <div className="flex items-center gap-2 mb-2 p-1 bg-studio-background-accent rounded-md border border-studio-border">
+            {/* Compact Control Row */}
+            <div className="flex flex-col gap-2 mb-2">
+              <div className="flex items-center gap-2 p-1 bg-studio-background-accent rounded-md border border-studio-border">
                 <Input 
                   placeholder="Enter text to generate graph..."
                   className="flex-grow bg-studio-background h-8 text-sm"
@@ -575,9 +747,100 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                   <Zap className="size-3.5" />
                   {isGeneratingGraph ? "Creating..." : "Create & Visualize"} 
                 </Button>
+              </div>
+              
+              {/* Add semantic search controls for the graph */}
+              <div className="flex items-center gap-2 p-1 bg-studio-background-accent rounded-md border border-studio-border">
+                <Input 
+                  placeholder="Search within graph..."
+                  className="flex-grow bg-studio-background h-8 text-sm"
+                  value={graphQuery}
+                  onChange={(e) => setGraphQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !isSearchingGraph && graphQuery.trim()) handleGraphSearch(); }}
+                  disabled={isSearchingGraph || graphNodes.length === 0}
+                />
+                <Button 
+                  onClick={handleGraphSearch}
+                  disabled={isSearchingGraph || !graphQuery.trim() || graphNodes.length === 0}
+                  className="flex items-center gap-1 bg-studio-accent hover:bg-studio-accent/90 whitespace-nowrap h-8"
+                  size="sm"
+                >
+                  <Search className="size-3.5" />
+                  {isSearchingGraph ? "Searching..." : "Find Similar"} 
+                </Button>
+                {highlightedNodes.size > 0 && (
+                  <Button 
+                    onClick={clearHighlights}
+                    className="flex items-center gap-1 bg-transparent border-studio-border hover:bg-studio-background whitespace-nowrap h-8"
+                    size="sm"
+                    variant="outline"
+                  >
+                    <X className="size-3.5" />
+                    Clear 
+                  </Button>
+                )}
+              </div>
+              
+              {/* Add Node Weight/Attention control */}
+              <div className="flex items-center justify-between gap-2 p-1 bg-studio-background-accent rounded-md border border-studio-border">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Node Sizing:</span>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="h-8 bg-studio-background flex items-center gap-1"
+                      >
+                        {nodeSizingMode === 'uniform' && <Filter className="size-3.5" />}
+                        {nodeSizingMode === 'importance' && <BarChart className="size-3.5" />}
+                        {nodeSizingMode === 'recency' && <Clock className="size-3.5" />}
+                        {nodeSizingMode === 'frequency' && <Activity className="size-3.5" />}
+                        <span className="capitalize">{nodeSizingMode}</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuLabel>Size Nodes By</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => setNodeSizingMode('uniform')}>
+                        <Filter className="size-4 mr-2" />
+                        <span>Uniform (Default)</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setNodeSizingMode('importance')}>
+                        <BarChart className="size-4 mr-2" />
+                        <span>Importance</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setNodeSizingMode('recency')}>
+                        <Clock className="size-4 mr-2" />
+                        <span>Recency</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setNodeSizingMode('frequency')}>
+                        <Activity className="size-4 mr-2" />
+                        <span>Access Frequency</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                
+                {highlightedNodes.size > 0 && (
+                  <div className="flex items-center gap-2 flex-grow">
+                    <Label htmlFor="highlight-intensity" className="text-xs whitespace-nowrap">Highlight Intensity:</Label>
+                    <Slider 
+                      id="highlight-intensity"
+                      min={0.3} 
+                      max={1.0} 
+                      step={0.05} 
+                      value={[highlightIntensity]}
+                      onValueChange={(value) => setHighlightIntensity(value[0])}
+                      className="flex-grow"
+                    />
+                    <span className="text-xs font-medium w-10 text-right">{(highlightIntensity * 100).toFixed(0)}%</span>
+                  </div>
+                )}
+              </div>
             </div>
             
-            {/* Graph Container - Now taller with more space for visualization */}
+            {/* Graph Container */}
             <div 
               ref={graphContainerRef} 
               className="flex-1 border border-studio-border rounded-lg overflow-hidden bg-studio-background-accent min-h-[350px] relative"
@@ -680,6 +943,9 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                       <rect id="gridRect" width="100%" height="100%" fill="url(#darkGrid)"/>
                     </svg>
                   `)}`}
+                  // Node appearance and interaction
+                  nodeRelSize={nodeSizingMode === 'uniform' ? 4 : 1} // Base size, will be multiplied by node.size for non-uniform modes
+                  onNodeClick={handleNodeClick} // Track node access on click
                   // Customize appearance
                   nodeCanvasObject={(node, ctx, globalScale) => {
                     const label = node.label as string;
@@ -693,29 +959,82 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                     ctx.beginPath();
                     ctx.arc(node.x ?? 0, node.y ?? 0, nodeR, 0, 2 * Math.PI);
                     
-                    // Create gradient for nodes based on type
-                    const gradient = ctx.createRadialGradient(
-                      node.x ?? 0, node.y ?? 0, 0,
-                      node.x ?? 0, node.y ?? 0, nodeR
-                    );
-                    
-                    // Use type to determine node color
+                    // Use node highlight information for coloring
+                    const isHighlighted = (node as any).highlighted;
                     const nodeType = (node as any).type;
-                    if (nodeType === 'prompt') {
-                      gradient.addColorStop(0, '#9333ea'); // Violet core
-                      gradient.addColorStop(1, '#7e22ce'); // Darker violet edge
-                    } else if (nodeType === 'document') {
-                      gradient.addColorStop(0, '#3b82f6'); // Blue core
-                      gradient.addColorStop(1, '#2563eb'); // Darker blue edge
+                    
+                    // Modify appearance based on highlight status
+                    if (highlightedNodes.size > 0) {
+                      // When we have active highlights
+                      if (isHighlighted) {
+                        // Highlighted nodes are vibrant
+                        const gradient = ctx.createRadialGradient(
+                          node.x ?? 0, node.y ?? 0, 0,
+                          node.x ?? 0, node.y ?? 0, nodeR * 1.3 // Make highlighted nodes slightly larger
+                        );
+                        
+                        if (nodeType === 'prompt') {
+                          gradient.addColorStop(0, '#be2eff'); // Brighter violet core
+                          gradient.addColorStop(1, '#9333ea'); // Vibrant violet edge
+                        } else if (nodeType === 'document') {
+                          gradient.addColorStop(0, '#60a9ff'); // Brighter blue core
+                          gradient.addColorStop(1, '#3b82f6'); // Vibrant blue edge
+                        } else {
+                          gradient.addColorStop(0, '#34eaa3'); // Brighter green core
+                          gradient.addColorStop(1, '#10b981'); // Vibrant green edge
+                        }
+                        
+                        ctx.fillStyle = gradient;
+                        // Create glow effect
+                        ctx.shadowColor = nodeType === 'prompt' ? '#9333ea' : nodeType === 'document' ? '#3b82f6' : '#10b981';
+                        ctx.shadowBlur = 8 * highlightIntensity;
+                      } else {
+                        // Non-highlighted nodes are muted
+                        const gradient = ctx.createRadialGradient(
+                          node.x ?? 0, node.y ?? 0, 0,
+                          node.x ?? 0, node.y ?? 0, nodeR
+                        );
+                        
+                        if (nodeType === 'prompt') {
+                          gradient.addColorStop(0, '#9333ea44'); // Faded violet core
+                          gradient.addColorStop(1, '#7e22ce33'); // Faded violet edge
+                        } else if (nodeType === 'document') {
+                          gradient.addColorStop(0, '#3b82f644'); // Faded blue core
+                          gradient.addColorStop(1, '#2563eb33'); // Faded blue edge
+                        } else {
+                          gradient.addColorStop(0, '#10b98144'); // Faded green core
+                          gradient.addColorStop(1, '#05966933'); // Faded green edge
+                        }
+                        
+                        ctx.fillStyle = gradient;
+                        ctx.shadowBlur = 0; // No glow for non-highlighted nodes
+                      }
                     } else {
-                      gradient.addColorStop(0, '#10b981'); // Green core
-                      gradient.addColorStop(1, '#059669'); // Darker green edge
+                      // Default appearance when no highlighting is active
+                      const gradient = ctx.createRadialGradient(
+                        node.x ?? 0, node.y ?? 0, 0,
+                        node.x ?? 0, node.y ?? 0, nodeR
+                      );
+                      
+                      if (nodeType === 'prompt') {
+                        gradient.addColorStop(0, '#9333ea'); // Violet core
+                        gradient.addColorStop(1, '#7e22ce'); // Darker violet edge
+                      } else if (nodeType === 'document') {
+                        gradient.addColorStop(0, '#3b82f6'); // Blue core
+                        gradient.addColorStop(1, '#2563eb'); // Darker blue edge
+                      } else {
+                        gradient.addColorStop(0, '#10b981'); // Green core
+                        gradient.addColorStop(1, '#059669'); // Darker green edge
+                      }
+                      
+                      ctx.fillStyle = gradient;
+                      ctx.shadowBlur = 0; // No glow in default state
                     }
                     
-                    ctx.fillStyle = gradient;
                     ctx.fill();
                     
                     // Draw node border
+                    ctx.shadowBlur = 0; // Reset shadow for border
                     ctx.strokeStyle = '#ffffff33';
                     ctx.lineWidth = 0.5;
                     ctx.stroke();
@@ -818,7 +1137,6 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                   enablePanInteraction={true}
                   cooldownTicks={100}
                   cooldownTime={3000} // Longer cooldown for better stabilization
-                  nodeRelSize={4}
                   d3AlphaDecay={0.015} // Slower decay for smoother motion
                   d3VelocityDecay={0.2} // Less friction for more dynamic movement
                 />
