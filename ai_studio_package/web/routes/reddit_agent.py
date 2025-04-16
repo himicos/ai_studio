@@ -10,13 +10,20 @@ from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 import json # Ensure json is imported if saving summary to memory nodes
+import uuid
+import time
+import asyncio
+import functools
 
 # Import the tracker and DB functions (assuming tracker is instantiated in main app)
 from data.reddit_tracker import RedditTracker
 from ai_studio_package.infra.db_enhanced import (
     get_db_connection, get_reddit_feed, create_memory_node,
-    get_top_reddit_posts
+    get_top_reddit_posts, create_memory_from_post
 )
+from ai_studio_package.infra.models import load_embedding_model
+from ai_studio_package.infra.summarizer import SummarizationPipelineSingleton
+from ai_studio_package.infra.vector_adapter import generate_embedding_for_node_faiss
 
 logger = logging.getLogger("ai_studio.reddit_agent")
 router = APIRouter(prefix="/api/reddit/agent", tags=["Reddit Agent"])
@@ -301,6 +308,16 @@ async def summarize_reddit_post(
             else:
                  logger.error(f"Failed to save Reddit post summary to memory for post {post_id}")
             conn.commit() # Commit after create_memory_node call
+
+            # --- Trigger Background Embedding --- 
+            logger.info(f"Triggering background embedding generation for Reddit node: {memory_node_id}")
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(
+                None, # Use default ThreadPoolExecutor
+                functools.partial(generate_embedding_for_node_faiss, memory_node_id)
+            ) # No need to await the executor task here
+            # ------------------------------------ 
+            
         except Exception as mem_e:
             logger.error(f"Error saving summary to memory for post {post_id}: {mem_e}", exc_info=True)
             if conn: conn.rollback()
@@ -349,3 +366,67 @@ async def get_top_posts(
     finally:
         if conn:
             conn.close() 
+
+def store_reddit_summary(
+    post: Dict[str, Any],
+    summary: str,
+    summarizer_model_name: str
+):
+    """Stores a Reddit post and its summary as a memory node and triggers embedding."""
+    
+    # Prepare data for memory node creation
+    # Use permalink or another stable identifier for source_id
+    # Ensure uniqueness for the primary key `id`
+    node_id = f"reddit_{post.get('id', str(uuid.uuid4()))}"
+    source_id = post.get('permalink', node_id) # Use permalink if available
+    tags = ['reddit', 'summary', post.get('subreddit')]
+    metadata = {
+        'source_id': post.get('id'),
+        'source_type': 'reddit',
+        'subreddit': post.get('subreddit'),
+        'title': post.get('title', ''),
+        'author': post.get('author'),
+        'upvotes': post.get('score'),
+        'num_comments': post.get('num_comments'),
+        'url': post.get('url'), # Direct link to post
+        'permalink': post.get('permalink'), # Reddit permalink
+        'model_used': summarizer_model_name, 
+        'fetched_at': int(time.time()),
+        'created_utc': int(post.get('created_utc', 0))
+    }
+    
+    memory_node_data = {
+        "id": node_id,
+        "type": "reddit_summary",
+        "content": summary, # The generated summary
+        "tags": json.dumps([t for t in tags if t]), # Ensure no None tags
+        "created_at": int(post.get('created_utc', int(time.time()))), # Use post creation time
+        "updated_at": int(time.time()), # Use current time for update
+        "source_id": source_id,
+        "source_type": "reddit",
+        "metadata": json.dumps(metadata),
+        "has_embedding": 0 # Initially false
+    }
+    
+    try:
+        # Call the function to insert/update the memory node
+        inserted_or_updated = create_memory_from_post(memory_node_data)
+
+        if inserted_or_updated:
+            logger.info(f"Successfully stored or updated memory node for Reddit post: {node_id}")
+            
+            # --- Trigger Background Embedding --- 
+            logger.info(f"Triggering background embedding generation for Reddit node: {node_id}")
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(
+                None, # Use default ThreadPoolExecutor
+                functools.partial(generate_embedding_for_node_faiss, node_id)
+            ) # No need to await the executor task here
+            # ------------------------------------ 
+            
+        else:
+            # This case might occur if ON CONFLICT DO NOTHING happens and no update was made
+            logger.info(f"Memory node for Reddit post {node_id} already exists and was not updated.")
+
+    except Exception as e:
+        logger.error(f"Error storing Reddit summary memory node {node_id}: {e}", exc_info=True)

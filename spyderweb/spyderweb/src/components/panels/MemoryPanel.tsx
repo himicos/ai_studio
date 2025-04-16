@@ -6,7 +6,8 @@ import {
   Network, Link, Zap, FileCode, 
   Plug, ArrowRight, Plus, Search, 
   DatabaseBackup, FileJson, BrainCircuit, X,
-  BarChart, Clock, Activity, Filter
+  BarChart, Clock, Activity, Filter, 
+  Brain, CheckIcon, Settings
 } from "lucide-react";
 import {
   Card,
@@ -30,9 +31,6 @@ import {
   generateKnowledgeGraph,
   getMemoryNodes,
   getMemoryEdges,
-  MemoryNode,
-  MemoryEdge,
-  NodeMetadata,
   getNodeWeights,
   trackNodeAccess
 } from "../../lib/api";
@@ -46,6 +44,27 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { 
+  AlertDialog, 
+  AlertDialogAction, 
+  AlertDialogCancel, 
+  AlertDialogContent, 
+  AlertDialogDescription, 
+  AlertDialogFooter, 
+  AlertDialogHeader, 
+  AlertDialogTitle 
+} from "@/components/ui/alert-dialog";
+import ContextMenu from "@/components/graph/ContextMenu";
+import * as contextActions from "@/lib/actions/contextActions";
+import { useDispatch, useSelector } from 'react-redux';
+import { Virtuoso } from 'react-virtuoso';
+import { Disclosure, Menu, Transition } from '@headlessui/react';
+import { useMediaQuery } from 'react-responsive';
+import { DotLottiePlayer } from '@dotlottie/react-player';
+import { ClipLoader } from 'react-spinners';
+import { RootState } from '../../redux/store';
+import { MemoryNode, MemoryEdge, PanelVisualizationType, setSelectedVisualization, setSelectedMemoryNode, VisualizationOptions, setVisualizationOptions } from '../../redux/slices/appSlice';
+import { type MemoryNode as ApiMemoryNode, type MemoryEdge as ApiMemoryEdge } from '../../lib/api';
 
 const sampleNodes = [
   { id: 'node1', label: 'Project Overview', type: 'document', connections: ['node2', 'node3'] },
@@ -86,9 +105,41 @@ const RELATION_COLORS = {
 
 // Add this new interface for relationship focus
 interface RelationshipView {
-  source: MemoryNode;
-  target: MemoryNode;
-  edge: MemoryEdge;
+  source: ApiMemoryNode;
+  target: ApiMemoryNode;
+  edge: ApiMemoryEdge;
+}
+
+// Force Graph node object interface
+interface FGNodeObject {
+  id: string;
+  x?: number;
+  y?: number;
+  [key: string]: any;
+}
+
+// Define the types we need
+interface GraphNode {
+  id: string;
+  color?: string;
+  val?: number;
+  x?: number;
+  y?: number;
+  __bckgDimensions?: number[];
+  // Add other properties as needed
+}
+
+interface GraphLink {
+  source: string;
+  target: string;
+  color?: string;
+  label?: string;
+  highlighted?: boolean;
+}
+
+// Define the NodeMetadata interface
+interface NodeMetadata {
+  [key: string]: any;
 }
 
 export default function MemoryPanel({ id }: MemoryPanelProps) {
@@ -103,12 +154,13 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [semanticResults, setSemanticResults] = useState<MemoryNodeSearchResult[]>([]);
   const [isLoadingSemanticSearch, setIsLoadingSemanticSearch] = useState(false);
   const [semanticSearchError, setSemanticSearchError] = useState<string | null>(null);
-  const [minSimilarity, setMinSimilarity] = useState<number>(0.5);
+  const [minSimilarity, setMinSimilarity] = useState<number>(0.3);
 
   const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
 
-  const [graphNodes, setGraphNodes] = useState<MemoryNode[]>([]);
-  const [graphEdges, setGraphEdges] = useState<MemoryEdge[]>([]);
+  const [graphRef, setGraphRef] = useState<any>(null);
+  const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
+  const [graphLinks, setGraphLinks] = useState<GraphLink[]>([]);
   const [isLoadingGraph, setIsLoadingGraph] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
 
@@ -130,6 +182,19 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [relationshipFilter, setRelationshipFilter] = useState<string | null>(null);
   const [nodeTypeFilter, setNodeTypeFilter] = useState<string | null>(null);
   const [showRelationshipsView, setShowRelationshipsView] = useState(false);
+
+  // --- New State for Context Menu ---
+  const [contextMenuVisible, setContextMenuVisible] = useState<boolean>(false);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const [contextMenuNode, setContextMenuNode] = useState<ApiMemoryNode | null>(null);
+
+  // --- State for Confirmation Dialog ---
+  const [confirmDialogState, setConfirmDialogState] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   const filteredNodes = sampleNodes.filter(node => 
     node.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -193,7 +258,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       console.log('[DEBUG] Fetched Nodes:', nodesResponse);
       console.log('[DEBUG] Fetched Edges:', edgesResponse);
       setGraphNodes(nodesResponse);
-      setGraphEdges(edgesResponse);
+      setGraphLinks(edgesResponse);
       if (nodesResponse.length > 0 || edgesResponse.length > 0) {
          toast.info(`Loaded ${nodesResponse.length} nodes and ${edgesResponse.length} edges.`);
          
@@ -305,16 +370,32 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     setSemanticResults([]);
 
     try {
+      // Clean the query by removing trailing ellipses and whitespace
+      const cleanedQuery = semanticQuery.trim().replace(/\.{3,}$/, '').replace(/\s+/g, ' ');
+      
       const payload: SemanticSearchRequestPayload = { 
-        query_text: semanticQuery,
+        query_text: cleanedQuery,
         min_similarity: minSimilarity
       };
+      console.log('Cleaned search query:', cleanedQuery, 'Min similarity:', minSimilarity);
       const results = await searchMemoryNodes(payload);
       setSemanticResults(results);
+      
       if (results.length === 0) {
-         toast.info("No similar memory nodes found.");
+        if (minSimilarity > 0.4) {
+          toast.info("No results found. Try lowering the minimum similarity threshold.", {
+            description: "Current threshold: " + (minSimilarity * 100).toFixed(0) + "%"
+          });
+        } else {
+          toast.info("No similar memory nodes found.", {
+            description: "Try a different search query."
+          });
+        }
       } else {
-         toast.success(`Found ${results.length} similar node(s).`);
+        const avgSimilarity = results.reduce((sum, node) => sum + node.similarity, 0) / results.length;
+        toast.success(`Found ${results.length} similar node(s).`, {
+          description: `Average similarity: ${(avgSimilarity * 100).toFixed(0)}%`
+        });
       }
     } catch (error) {
       console.error("Semantic search failed:", error);
@@ -341,9 +422,12 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     
     setIsSearchingGraph(true);
     try {
+      // Clean the query by removing trailing ellipses and whitespace
+      const cleanedQuery = graphQuery.trim().replace(/\.{3,}$/, '');
+      
       // Use the same API as semantic search panel
       const payload: SemanticSearchRequestPayload = { 
-        query_text: graphQuery,
+        query_text: cleanedQuery,
         min_similarity: 0.3 // Lower threshold for graph visualization
       };
       
@@ -376,9 +460,12 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
         console.warn("API search failed, falling back to client-side search:", error);
         
         // Perform a basic client-side search
-        const queryTerms = graphQuery.toLowerCase().split(/\s+/);
+        const queryTerms = cleanedQuery.toLowerCase().split(/\s+/);
         const matchingNodes = graphNodes.filter(node => {
-          const nodeContent = node.content.toLowerCase();
+          // Cast to ApiMemoryNode to access content property safely
+          const apiNode = node as unknown as ApiMemoryNode;
+          if (!apiNode.content) return false;
+          const nodeContent = apiNode.content.toLowerCase();
           return queryTerms.some(term => nodeContent.includes(term));
         });
         
@@ -465,41 +552,32 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   }, [nodeSizingMode, nodeWeights]);
 
   // Handle node click to update access tracking
-  const handleNodeClick = useCallback((node: any) => {
+  const handleNodeClick = useCallback((node: FGNodeObject, event: MouseEvent) => {
+    if (contextMenuVisible) {
+        setContextMenuVisible(false);
+        setContextMenuNode(null);
+        setContextMenuPosition(null);
+    }
+    
+    console.log("Node clicked:", node);
     const nodeId = node.id as string;
-    
-    // Update local state
-    setNodeWeights(prev => {
-      const prevMetadata = prev[nodeId] || {};
-      const now = Date.now() / 1000; // current time in seconds
-      
-      return {
-        ...prev,
-        [nodeId]: {
-          ...prevMetadata,
-          last_accessed: now,
-          access_count: (prevMetadata.access_count || 0) + 1
-        }
-      };
+    const graphNode = node as GraphNode;
+    toast.info(`Node Clicked: ${nodeId}`, {
+        description: `Type: ${graphNode.type}, Label: ${graphNode.label}`
     });
-    
-    // Track the access on the server
+
     trackNodeAccess({
-      node_id: nodeId,
-      access_type: 'view'
+        node_id: nodeId,
+        access_type: 'view',
+        access_weight: 1.0 
     }).catch(error => {
-      console.error("Failed to track node access:", error);
+        console.warn(`Failed to track view access for node ${nodeId}:`, error);
     });
-    
-    // Show node details
-    toast.info(`Node: ${node.label}`, {
-      description: node.fullContent,
-      duration: 5000
-    });
-  }, []);
+
+  }, [contextMenuVisible]);
 
   // Modify the graphData object to include filtering
-  const graphData = useMemo(() => {
+  const graphData = useMemo<{ nodes: GraphNode[], links: GraphLink[] }>(() => {
     // Filter nodes based on node type filter
     const filteredNodes = graphNodes.filter(node => 
       !nodeTypeFilter || node.type === nodeTypeFilter
@@ -509,60 +587,79 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     const filteredNodeIds = new Set(filteredNodes.map(node => node.id));
     
     // Filter edges based on relationship filter and filtered nodes
-    const filteredEdges = graphEdges.filter(edge => 
+    const filteredEdges = graphLinks.filter(edge => 
       (!relationshipFilter || edge.label === relationshipFilter) && 
-      filteredNodeIds.has(edge.source_node_id) && 
-      filteredNodeIds.has(edge.target_node_id)
+      filteredNodeIds.has(edge.source) && 
+      filteredNodeIds.has(edge.target)
     );
     
-    return {
-      nodes: filteredNodes.map(node => {
-        const isHighlighted = highlightedNodes.has(node.id);
-        return {
-        id: node.id, 
-        label: node.content.split('\n')[0].substring(0,30),
-        fullContent: node.content,
-        type: node.type,
+    const filteredNodesTyped: GraphNode[] = filteredNodes.map(node => {
+       const isHighlighted = highlightedNodes.has(node.id);
+       return {
+          // Ensure all fields required by ForceGraph2D and ContextMenu are here
+          ...(node as ApiMemoryNode), // Spread the original node data
+          id: node.id,
+          label: node.content.split('\n')[0].substring(0, 30),
+          fullContent: node.content,
+          type: node.type,
           highlighted: isHighlighted,
-          color: isHighlighted ? 
-            (node.type === 'prompt' ? '#9333ea' : 
-            node.type === 'document' ? '#3b82f6' : 
-            '#10b981') : 
-            undefined,
-          size: calculateNodeSize(node.id, isHighlighted)
-        };
-      }),
-      links: filteredEdges.map(edge => {
-        const isEdgeHighlit = isEdgeHighlighted(edge.source_node_id, edge.target_node_id);
-        return { 
-        source: edge.source_node_id,
-        target: edge.target_node_id,
+          // Apply color based on highlight/type
+          color: isHighlighted ? (node.type === 'prompt' ? '#9333ea' : node.type === 'document' ? '#3b82f6' : '#10b981') : undefined,
+          // Calculate size based on mode and weights
+          size: calculateNodeSize(node.id, isHighlighted),
+          // Ensure metadata is passed if needed by actions
+          metadata: (node as ApiMemoryNode).metadata 
+      };
+    });
+    
+    const filteredEdgesTyped = filteredEdges.map(edge => {
+      const isEdgeHighlit = isEdgeHighlighted(edge.source, edge.target);
+      return { 
+        source: edge.source,
+        target: edge.target,
         label: edge.label,
-          highlighted: isEdgeHighlit,
-          color: getRelationshipColor(edge.label, isEdgeHighlit)
-        };
-      })
+        highlighted: isEdgeHighlit,
+        color: getRelationshipColor(edge.label, isEdgeHighlit)
+      };
+    });
+    
+    const graphDataResult = {
+      nodes: filteredNodesTyped,
+      links: filteredEdgesTyped
     };
-  }, [graphNodes, graphEdges, highlightedNodes, nodeTypeFilter, relationshipFilter, isEdgeHighlighted, getRelationshipColor, calculateNodeSize]);
+    
+    // --- DEBUG LOG FOR GRAPH RENDER CONDITION (moved here) ---
+    console.log('[DEBUG] Graph Render Check (inside useMemo):', {
+      width: graphDimensions.width,
+      height: graphDimensions.height,
+      nodesLength: graphNodes.length, // Use graphNodes directly here
+      isLoading: isLoadingGraph,
+      error: graphError,
+      shouldRender: graphDimensions.width > 0 && graphDimensions.height > 0 && graphNodes.length > 0 && !isLoadingGraph && !graphError
+    });
+    // --- END DEBUG LOG ---
+    
+    return graphDataResult; // Return the calculated data
+  }, [graphNodes, graphLinks, highlightedNodes, nodeTypeFilter, relationshipFilter, isEdgeHighlighted, getRelationshipColor, calculateNodeSize, graphDimensions, isLoadingGraph, graphError]); // Add dependencies
 
   // Calculate relationships for the relationships view
   const relationships: RelationshipView[] = useMemo(() => {
-    if (graphNodes.length === 0 || graphEdges.length === 0) return [];
+    if (graphNodes.length === 0 || graphLinks.length === 0) return [];
     
     // Create a map for faster node lookup
-    const nodeMap = new Map<string, MemoryNode>();
+    const nodeMap = new Map<string, ApiMemoryNode>();
     graphNodes.forEach(node => nodeMap.set(node.id, node));
     
     // Build relationship objects
-    return graphEdges
+    return graphLinks
       .filter(edge => {
         // Apply relationship filter if present
         if (relationshipFilter && edge.label !== relationshipFilter) return false;
         
         // Apply node type filter if present
         if (nodeTypeFilter) {
-          const source = nodeMap.get(edge.source_node_id);
-          const target = nodeMap.get(edge.target_node_id);
+          const source = nodeMap.get(edge.source);
+          const target = nodeMap.get(edge.target);
           if (!source || !target) return false;
           if (source.type !== nodeTypeFilter && target.type !== nodeTypeFilter) return false;
         }
@@ -570,8 +667,8 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
         return true;
       })
       .map(edge => {
-        const source = nodeMap.get(edge.source_node_id);
-        const target = nodeMap.get(edge.target_node_id);
+        const source = nodeMap.get(edge.source);
+        const target = nodeMap.get(edge.target);
         
         // Skip invalid relationships
         if (!source || !target) return null;
@@ -583,14 +680,14 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
         };
       })
       .filter((item): item is RelationshipView => item !== null);
-  }, [graphNodes, graphEdges, relationshipFilter, nodeTypeFilter]);
+  }, [graphNodes, graphLinks, relationshipFilter, nodeTypeFilter]);
 
   // Find all unique relationship types
   const relationshipTypes = useMemo(() => {
     const types = new Set<string>();
-    graphEdges.forEach(edge => types.add(edge.label));
+    graphLinks.forEach(edge => types.add(edge.label));
     return Array.from(types).sort();
-  }, [graphEdges]);
+  }, [graphLinks]);
   
   // Find all unique node types
   const nodeTypes = useMemo(() => {
@@ -604,7 +701,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
     isLoadingGraph,
     graphError,
     graphNodesLength: graphNodes.length,
-    graphEdgesLength: graphEdges.length,
+    graphEdgesLength: graphLinks.length,
     graphDimensions
   });
 
@@ -643,6 +740,111 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       observer.disconnect();
     };
   }, []);
+
+  // --- NEW Context Menu Handlers ---
+  const handleNodeRightClick = useCallback((node: FGNodeObject, event: MouseEvent) => {
+    event.preventDefault();
+    console.log("Node right-clicked:", node);
+    
+    const fullNodeData = graphNodes.find(n => n.id === node.id);
+    
+    if (fullNodeData) {
+        setContextMenuNode(fullNodeData);
+        setContextMenuPosition({ x: event.pageX, y: event.pageY });
+        setContextMenuVisible(true);
+        
+        // TODO: Update backend NodeAccessPayload to allow 'context_menu' type for specific tracking.
+        // Using 'view' temporarily to avoid frontend error.
+        trackNodeAccess({
+            node_id: fullNodeData.id,
+            access_type: 'view', // Changed from 'context_menu' temporarily
+            access_weight: 0.5 
+        }).catch(error => {
+            console.warn(`Failed to track context menu access (as view) for node ${fullNodeData.id}:`, error);
+        });
+    } else {
+        console.warn(`Could not find full data for right-clicked node ID: ${node.id}`);
+        toast.error("Could not get node details for context menu.");
+        setContextMenuVisible(false);
+    }
+  }, [graphNodes]);
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenuVisible(false);
+    setContextMenuNode(null);
+    setContextMenuPosition(null);
+  }, []);
+
+  const showConfirmation = useCallback((options: { title: string, description: string, onConfirm: () => void }) => {
+    setConfirmDialogState({ ...options, isOpen: true });
+  }, []);
+
+  const handleContextMenuAction = useCallback(async (actionKey: string, node: ApiMemoryNode) => {
+    console.log(`Context Action Triggered: ${actionKey} on node ${node.id}`);
+    handleCloseContextMenu(); // Close menu immediately
+
+    switch (actionKey) {
+      case 'summarize':
+        await contextActions.handleSummarize(node);
+        break;
+      case 'findSimilar':
+        await contextActions.handleFindSimilar(node);
+        // TODO: How to display results? Highlight nodes? Open side panel?
+        break;
+      case 'copyContent':
+        contextActions.handleCopyContent(node);
+        break;
+      case 'copyNodeId':
+        contextActions.handleCopyNodeId(node);
+        break;
+      case 'delete':
+        // Pass the showConfirmation function to the handler
+        await contextActions.handleDelete(node, showConfirmation);
+        break;
+      case 'viewOnX':
+        contextActions.handleViewOnX(node);
+        break;
+      case 'generateReply':
+        await contextActions.handleGenerateReply(node);
+        break;
+      case 'viewOnReddit':
+        contextActions.handleViewOnReddit(node);
+        break;
+      case 'summarizeComments':
+        await contextActions.handleSummarizeComments(node);
+        break;
+      default:
+        console.warn(`Unknown context menu action: ${actionKey}`);
+        toast.warning(`Action "${actionKey}" not implemented yet.`);
+    }
+  }, [handleCloseContextMenu, showConfirmation]); // Add dependencies
+
+  // --- Effect for closing menu on outside click ---
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      // Check if the click is outside the context menu
+      // A simple check might be enough if the menu is the only thing that should prevent closing
+      // More robust: check if event.target is not within the menu DOM element
+      if (contextMenuVisible) {
+         // Check if the click target is outside the menu element (requires ref on menu)
+         // For now, let's just close it on any click when visible
+         // We might need a ref on the ContextMenu component itself for better checking
+         console.log('Global click while menu visible - closing');
+         handleCloseContextMenu();
+      }
+    };
+
+    if (contextMenuVisible) {
+      document.addEventListener('click', handleClickOutside);
+    } else {
+      document.removeEventListener('click', handleClickOutside);
+    }
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [contextMenuVisible, handleCloseContextMenu]);
 
   return (
     <motion.div 
@@ -834,19 +1036,26 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                 <Button variant="outline" size="sm" className="text-xs">Filter</Button>
                 <Button variant="outline" size="sm" className="text-xs">Sort</Button>
               </div>
-              <div className="flex items-center gap-2 flex-grow min-w-[150px]">
-                 <Label htmlFor="similarity-slider" className="text-xs whitespace-nowrap">Min Similarity:</Label>
-                 <Slider 
-                   id="similarity-slider"
-                   min={0.1} 
-                   max={1.0} 
-                   step={0.05} 
-                   value={[minSimilarity]}
-                   onValueChange={(value) => setMinSimilarity(value[0])}
-                   className="flex-grow"
-                   disabled={isLoadingSemanticSearch}
-                 />
-                 <span className="text-xs font-medium w-10 text-right">{minSimilarity.toFixed(2)}</span>
+              <div className="flex flex-col w-full">
+                <div className="flex items-center gap-2 flex-grow min-w-[150px]">
+                  <Label htmlFor="similarity-slider" className="text-xs whitespace-nowrap">Min Similarity:</Label>
+                  <Slider 
+                    id="similarity-slider"
+                    min={0.1} 
+                    max={1.0} 
+                    step={0.05} 
+                    value={[minSimilarity]}
+                    onValueChange={(value) => setMinSimilarity(value[0])}
+                    className="flex-grow"
+                    disabled={isLoadingSemanticSearch}
+                  />
+                  <Badge variant="outline" className="text-xs font-medium w-16 text-right">
+                    {(minSimilarity * 100).toFixed(0)}%
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1 pl-2">
+                  Recommended: 30-40% for broad results, 60%+ for high precision
+                </p>
               </div>
             </div>
 
@@ -863,26 +1072,65 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                 )}
                 {semanticResults.length > 0 && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="col-span-full mb-2">
+                      <p className="text-sm text-muted-foreground">
+                        Found {semanticResults.length} result{semanticResults.length !== 1 ? 's' : ''} with average similarity of {
+                          (semanticResults.reduce((sum, node) => sum + node.similarity, 0) / semanticResults.length * 100).toFixed(0)
+                        }%
+                      </p>
+                    </div>
                     {semanticResults.map(node => (
-                      <Card key={node.id} className="bg-studio-background-accent mb-4">
+                      <Card key={node.id} className="bg-studio-background-accent mb-4 hover:bg-studio-background-accent/90 transition-colors">
                         <CardHeader className="pb-2">
                            <div className="flex justify-between items-start mb-1">
-                              <Badge variant="outline">{node.type}</Badge>
-                              <Badge variant="secondary" title="Similarity Score">
-                                 {(node.similarity * 100).toFixed(1)}%
+                              <Badge variant="outline" className="capitalize">{node.type}</Badge>
+                              <Badge 
+                                variant={node.similarity >= 0.6 ? "default" : 
+                                         node.similarity >= 0.4 ? "secondary" : 
+                                         "outline"} 
+                                className={
+                                  node.similarity >= 0.6 ? "bg-green-100 text-green-800 hover:bg-green-200" :
+                                  node.similarity >= 0.4 ? "bg-amber-100 text-amber-800 hover:bg-amber-200" :
+                                  "bg-gray-100 text-gray-800 hover:bg-gray-200"
+                                }
+                                title="Similarity Score"
+                              >
+                                 {(node.similarity * 100).toFixed(0)}%
                               </Badge>
                            </div>
-                           <CardTitle className="text-sm font-medium truncate" title={node.content}>
-                              {node.content.split('\\n')[0].substring(0, 100)}{node.content.length > 100 ? '...' : ''}
+                           <CardTitle className="text-sm font-medium" title={node.content}>
+                              {/* Show more content and enhance the display */}
+                              {node.content ? (
+                                node.content.split('\n')[0].substring(0, 100) + (node.content.length > 100 ? '...' : '')
+                              ) : (
+                                <span className="text-muted-foreground italic">No content available</span>
+                              )}
                            </CardTitle>
-                           <CardDescription className="text-xs">
-                             ID: {node.id} | Created: {new Date(node.created_at * 1000).toLocaleDateString()}
+                           <CardDescription className="text-xs mt-1 flex items-center justify-between">
+                             <span>ID: {node.id.substring(0, 12)}{node.id.length > 12 ? '...' : ''}</span>
+                             <span>{new Date(node.created_at * 1000).toLocaleDateString()}</span>
                            </CardDescription>
                         </CardHeader>
-                        <CardContent className="text-xs text-muted-foreground pt-1 pb-3">
-                           <p className="line-clamp-3" title={node.content}> 
-                              {node.content.split('\\n').slice(1).join('\\n') || node.content}
-                           </p>
+                        <CardContent className="text-xs text-muted-foreground pt-2 pb-3">
+                           {node.content ? (
+                             <div>
+                               <p className="line-clamp-3 pb-1 border-b border-studio-border mb-2"> 
+                                 {node.content.split('\n').slice(1).join('\n').substring(0, 150) + 
+                                 (node.content.length > 150 ? '...' : '')}
+                               </p>
+                               <div className="flex flex-wrap gap-1 mt-1">
+                                 {node.tags && node.tags.length > 0 ? (
+                                   node.tags.map((tag, idx) => (
+                                     <Badge key={idx} variant="outline" className="text-[10px] px-1 py-0">{tag}</Badge>
+                                   ))
+                                 ) : (
+                                   <span className="text-[10px] italic">No tags</span>
+                                 )}
+                               </div>
+                             </div>
+                           ) : (
+                             <p className="italic">No additional content</p>
+                           )}
                         </CardContent>
                       </Card>
                     ))}
@@ -1300,160 +1548,144 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
                   // Node sizing and interaction
                   nodeRelSize={nodeSizingMode === 'uniform' ? 4 : 1}
                   onNodeClick={handleNodeClick}
+                  onNodeRightClick={handleNodeRightClick}
                   
                   // Link styling - ENHANCED with directional particles and arrows
                   linkLabel="label"
-                  linkWidth={(link) => {
-                    // @ts-ignore - add stronger width contrast
-                    return link.highlighted ? 3 : 1;
-                  }}
-                  linkColor={(link) => {
-                    // @ts-ignore - use relationship-specific colors
-                    return link.color;
-                  }}
+                  linkWidth={(link) => (link as GraphLink).highlighted ? 3 : 1}
+                  linkColor={(link) => (link as GraphLink).color}
                   linkDirectionalParticles={(link) => {
                     // @ts-ignore - more particles on highlighted links
-                    return link.highlighted ? 8 : 3;
+                    return (link as GraphLink).highlighted ? 8 : 3;
                   }}
                   linkDirectionalParticleWidth={(link) => {
                     // @ts-ignore - wider particles on highlighted links
-                    return link.highlighted ? 4 : 2;
+                    return (link as GraphLink).highlighted ? 4 : 2;
                   }}
                   linkDirectionalParticleSpeed={(link) => {
                     // @ts-ignore - faster particles on highlighted links
-                    return link.highlighted ? 0.015 : 0.006;
+                    return (link as GraphLink).highlighted ? 0.015 : 0.006;
                   }}
                   linkDirectionalParticleColor={(link) => {
                     // @ts-ignore - use relationship-specific colors for particles
-                    return link.color;
+                    return (link as GraphLink).color;
                   }}
                   // Add directional arrows
                   linkDirectionalArrowLength={5}
                   linkDirectionalArrowRelPos={0.8}
                   linkDirectionalArrowColor={(link) => {
                     // @ts-ignore
-                    return link.color;
+                    return (link as GraphLink).color;
                   }}
                   
                   // Node appearance customization
                   nodeCanvasObject={(node, ctx, globalScale) => {
-                    const label = node.label as string;
+                    const graphNode = node as GraphNode;
+                    const label = graphNode.label || '';
                     const fontSize = 12 / globalScale;
                     ctx.font = `${fontSize}px Sans-Serif`;
                     const textWidth = ctx.measureText(label).width;
-                    const bgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4); // Box padding
+                    const bgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
 
-                    // Node visualization (circle with gradient)
-                    // @ts-ignore - Use dynamically calculated size
-                    const nodeR = node.size || 5;
+                    const nodeR = graphNode.size || 5;
                     ctx.beginPath();
-                    ctx.arc(node.x ?? 0, node.y ?? 0, nodeR, 0, 2 * Math.PI);
+                    ctx.arc(node.x || 0, node.y || 0, nodeR, 0, 2 * Math.PI); 
                     
-                    // Use node highlight information for coloring
-                    const isHighlighted = (node as any).highlighted;
-                    const nodeType = (node as any).type;
+                    const isHighlighted = graphNode.highlighted;
+                    const nodeType = graphNode.type;
                     
-                    // Modify appearance based on highlight status
                     if (highlightedNodes.size > 0) {
-                      // When we have active highlights
                       if (isHighlighted) {
-                        // Highlighted nodes are vibrant with stronger glow
                         const gradient = ctx.createRadialGradient(
-                          node.x ?? 0, node.y ?? 0, 0,
-                          node.x ?? 0, node.y ?? 0, nodeR * 1.3 // Make highlighted nodes glow larger
+                          node.x || 0, node.y || 0, 0,
+                          node.x || 0, node.y || 0, nodeR * 1.3
                         );
                         
                         if (nodeType === 'prompt') {
-                          gradient.addColorStop(0, '#be2eff'); // Brighter violet core
-                          gradient.addColorStop(1, '#9333ea'); // Vibrant violet edge
+                          gradient.addColorStop(0, '#be2eff');
+                          gradient.addColorStop(1, '#9333ea');
                         } else if (nodeType === 'document') {
-                          gradient.addColorStop(0, '#60a9ff'); // Brighter blue core
-                          gradient.addColorStop(1, '#3b82f6'); // Vibrant blue edge
+                          gradient.addColorStop(0, '#60a9ff');
+                          gradient.addColorStop(1, '#3b82f6');
                         } else {
-                          gradient.addColorStop(0, '#34eaa3'); // Brighter green core
-                          gradient.addColorStop(1, '#10b981'); // Vibrant green edge
+                          gradient.addColorStop(0, '#34eaa3');
+                          gradient.addColorStop(1, '#10b981');
                         }
                         
                         ctx.fillStyle = gradient;
-                        // Create stronger glow effect
                         ctx.shadowColor = nodeType === 'prompt' ? '#9333ea' : nodeType === 'document' ? '#3b82f6' : '#10b981';
-                        ctx.shadowBlur = 12 * highlightIntensity; // Increased glow
+                        ctx.shadowBlur = 12 * highlightIntensity;
                       } else {
-                        // Non-highlighted nodes are more muted
                         const gradient = ctx.createRadialGradient(
-                          node.x ?? 0, node.y ?? 0, 0,
-                          node.x ?? 0, node.y ?? 0, nodeR
+                          node.x || 0, node.y || 0, 0,
+                          node.x || 0, node.y || 0, nodeR
                         );
                         
                         if (nodeType === 'prompt') {
-                          gradient.addColorStop(0, '#9333ea33'); // More faded violet core
-                          gradient.addColorStop(1, '#7e22ce22'); // More faded violet edge
+                          gradient.addColorStop(0, '#9333ea33');
+                          gradient.addColorStop(1, '#7e22ce22');
                         } else if (nodeType === 'document') {
-                          gradient.addColorStop(0, '#3b82f633'); // More faded blue core
-                          gradient.addColorStop(1, '#2563eb22'); // More faded blue edge
+                          gradient.addColorStop(0, '#3b82f633');
+                          gradient.addColorStop(1, '#2563eb22');
                         } else {
-                          gradient.addColorStop(0, '#10b98133'); // More faded green core
-                          gradient.addColorStop(1, '#05966922'); // More faded green edge
+                          gradient.addColorStop(0, '#10b98133');
+                          gradient.addColorStop(1, '#05966922');
                         }
                         
                         ctx.fillStyle = gradient;
-                        ctx.shadowBlur = 0; // No glow for non-highlighted nodes
+                        ctx.shadowBlur = 0;
                       }
                     } else {
-                      // Default appearance when no highlighting is active
                       const gradient = ctx.createRadialGradient(
-                        node.x ?? 0, node.y ?? 0, 0,
-                        node.x ?? 0, node.y ?? 0, nodeR
+                        node.x || 0, node.y || 0, 0,
+                        node.x || 0, node.y || 0, nodeR
                       );
                       
                       if (nodeType === 'prompt') {
-                        gradient.addColorStop(0, '#9333ea'); // Violet core
-                        gradient.addColorStop(1, '#7e22ce'); // Darker violet edge
+                        gradient.addColorStop(0, '#9333ea');
+                        gradient.addColorStop(1, '#7e22ce');
                       } else if (nodeType === 'document') {
-                        gradient.addColorStop(0, '#3b82f6'); // Blue core
-                        gradient.addColorStop(1, '#2563eb'); // Darker blue edge
+                        gradient.addColorStop(0, '#3b82f6');
+                        gradient.addColorStop(1, '#2563eb');
                       } else {
-                        gradient.addColorStop(0, '#10b981'); // Green core
-                        gradient.addColorStop(1, '#059669'); // Darker green edge
+                        gradient.addColorStop(0, '#10b981');
+                        gradient.addColorStop(1, '#059669');
                       }
                       
                       ctx.fillStyle = gradient;
-                      ctx.shadowBlur = 0; // No glow in default state
+                      ctx.shadowBlur = 0;
                     }
                     
                     ctx.fill();
                     
-                    // Draw node border
-                    ctx.shadowBlur = 0; // Reset shadow for border
+                    ctx.shadowBlur = 0;
                     ctx.strokeStyle = '#ffffff33';
                     ctx.lineWidth = 0.5;
                     ctx.stroke();
 
-                    // Background rectangle for text
-                    ctx.fillStyle = 'rgba(18, 18, 18, 0.85)'; // Dark background for text
-                    ctx.fillRect((node.x ?? 0) - bgDimensions[0] / 2, (node.y ?? 0) - bgDimensions[1] / 2, bgDimensions[0], bgDimensions[1]);
+                    ctx.fillStyle = 'rgba(18, 18, 18, 0.85)';
+                    ctx.fillRect((node.x || 0) - bgDimensions[0] / 2, (node.y || 0) - bgDimensions[1] / 2, bgDimensions[0], bgDimensions[1]);
 
-                    // Text border
                     ctx.strokeStyle = '#ffffff22';
                     ctx.lineWidth = 0.5;
-                    ctx.strokeRect((node.x ?? 0) - bgDimensions[0] / 2, (node.y ?? 0) - bgDimensions[1] / 2, bgDimensions[0], bgDimensions[1]);
+                    ctx.strokeRect((node.x || 0) - bgDimensions[0] / 2, (node.y || 0) - bgDimensions[1] / 2, bgDimensions[0], bgDimensions[1]);
 
-                    // Text
-                     ctx.textAlign = 'center';
-                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = '#ffffff'; // White text for better contrast
-                    ctx.fillText(label, node.x ?? 0, node.y ?? 0);
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(label, node.x || 0, node.y || 0);
 
-                    node.__bckgDimensions = bgDimensions; // Cache dimensions for selection highlighting
+                    // Use a type assertion to avoid TypeScript error
+                    (node as any).__bckgDimensions = bgDimensions;
                   }}
                   
                   // Improved graph physics for better layout
                   cooldownTicks={150}
                   cooldownTime={5000}
-                  d3AlphaDecay={0.01} // Slower decay for more spread out layout
-                  d3VelocityDecay={0.15} // Lower decay for more movement
-                  d3Force="charge" // Add repulsive force between nodes
-                  d3ForceStrength={-120} // Stronger repulsion for more spacing
+                  d3AlphaDecay={0.01}
+                  d3VelocityDecay={0.15}
+                  d3Force="charge"
+                  d3ForceStrength={-120}
                 />
               )} 
             </div>
@@ -1537,6 +1769,42 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Render Context Menu (Outside the main card flow, positioned absolutely) */}
+      <ContextMenu
+        node={contextMenuNode}
+        position={contextMenuPosition}
+        isVisible={contextMenuVisible}
+        onClose={handleCloseContextMenu}
+        onAction={handleContextMenuAction}
+      />
+
+      {/* Render Confirmation Dialog */} 
+      {confirmDialogState?.isOpen && (
+          <AlertDialog open={confirmDialogState.isOpen} onOpenChange={(open) => !open && setConfirmDialogState(null)}>
+              <AlertDialogContent>
+                  <AlertDialogHeader>
+                      <AlertDialogTitle>{confirmDialogState.title}</AlertDialogTitle>
+                      <AlertDialogDescription>
+                          {confirmDialogState.description}
+                      </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                      <AlertDialogCancel onClick={() => setConfirmDialogState(null)}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction 
+                        onClick={() => {
+                            confirmDialogState.onConfirm();
+                            setConfirmDialogState(null); // Close dialog after confirmation
+                        }}
+                        className="bg-red-600 hover:bg-red-700 text-white" // Style confirm for destructive action
+                      >
+                        Confirm
+                      </AlertDialogAction>
+                  </AlertDialogFooter>
+              </AlertDialogContent>
+          </AlertDialog>
+      )}
+
     </motion.div>
   );
 }

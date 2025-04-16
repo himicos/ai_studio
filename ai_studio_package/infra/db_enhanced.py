@@ -1481,9 +1481,6 @@ def generate_embedding_for_node(node_id: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    from ai_studio_package.infra.settings import get_settings
-    settings = get_settings()
-    
     if not node_id:
         logging.error("Invalid node_id provided to generate_embedding_for_node")
         return False
@@ -1497,41 +1494,74 @@ def generate_embedding_for_node(node_id: str) -> bool:
         node = cursor.fetchone()
         
         if not node:
-            logging.error(f"Node {node_id} not found")
+            logging.error(f"Node {node_id} not found for embedding generation")
             return False
             
-        content = node[1]
+        content = node['content']
         if not content:
-            logging.error(f"Node {node_id} has no content")
-            return False
+            logging.warning(f"Node {node_id} has no content, skipping embedding generation.")
+            # Decide if this should update has_embedding flag or return True/False
+            # For now, return True as there's no error, just nothing to embed.
+            # Set has_embedding to 0 or keep current state? Setting to 0 is safer.
+            try:
+                cursor.execute("UPDATE memory_nodes SET has_embedding = 0 WHERE id = ?", (node_id,))
+                conn.commit()
+            except Exception as flag_err:
+                 logger.error(f"Error setting has_embedding=0 for empty content node {node_id}: {flag_err}")
+            return True # Indicate successful handling (no embedding generated)
+
+        # --- Log Content Being Embedded ---
+        content_preview = content[:100].replace("\n", " ") + ("..." if len(content) > 100 else "")
+        logger.debug(f"Generating embedding for node {node_id} with content: '{content_preview}'")
+        # --- End Log ---
             
         # Generate the embedding
-        from ai_studio_package.ml.models import get_model
+        # Use the globally loaded embedding_model
+        from ai_studio_package.infra.models import get_model
         embedding_model = get_model('embedding')
         
-        embedding = embedding_model.get_embeddings([content])[0]
+        # Corrected method call: .encode() instead of .get_embeddings()
+        embedding_vector = embedding_model.encode([content])[0] 
+        # embedding = embedding_model.get_embeddings([content])[0] # OLD INCORRECT LINE
         
+        # Ensure embedding is a numpy array for FAISS
+        if not isinstance(embedding_vector, np.ndarray):
+            embedding_vector = np.array(embedding_vector)
+            
         # Store the embedding appropriately based on settings
         success = True
         
         # If using FAISS, store there
-        if settings.use_faiss_vector_store:
-            faiss_success = generate_embedding_for_node_faiss(node_id, content, embedding)
+        if USE_FAISS_VECTOR_STORE:
+            faiss_success = generate_embedding_for_node_faiss(node_id, content, embedding_vector)
             success = success and faiss_success
             
             # If FAISS only (not dual write), we're done
-            if not settings.dual_write_embeddings:
+            if not dual_write_enabled():
+                # Before returning, update the has_embedding flag in SQLite
+                try:
+                    cursor.execute("UPDATE memory_nodes SET has_embedding = 1 WHERE id = ?", (node_id,))
+                    conn.commit()
+                    logger.debug(f"Updated has_embedding flag for node {node_id} after FAISS-only write.")
+                except Exception as db_update_err:
+                    logger.error(f"Error updating has_embedding flag for {node_id}: {db_update_err}")
+                    # Decide if this should cause the overall function to return False
+                    success = False # Mark as failure if flag update fails
+                finally:
+                    if conn:
+                        conn.close()
                 return success
         
-        # Store in SQLite if using SQLite or dual write
-        embedding_json = json.dumps(embedding.tolist())
+        # Store in SQLite if using SQLite or dual write is enabled
+        embedding_json = json.dumps(embedding_vector.tolist())
         cursor.execute(
-            "UPDATE memory_nodes SET embedding = ? WHERE id = ?",
+            "UPDATE memory_nodes SET embedding = ?, has_embedding = 1 WHERE id = ?", # Also set has_embedding here
             (embedding_json, node_id)
         )
         conn.commit()
         
-        logging.info(f"Generated and stored embedding for node {node_id}")
+        logger.info(f"Generated and stored embedding for node {node_id} (SQLite write: {dual_write_enabled() or not USE_FAISS_VECTOR_STORE})")
+        success = success and True # Ensure SQLite success is factored in if applicable
         return success
     except Exception as e:
         logging.error(f"Error generating embedding for node {node_id}: {e}")

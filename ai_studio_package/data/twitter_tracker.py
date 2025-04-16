@@ -1,13 +1,17 @@
 from .browser_manager import BrowserManager
 import logging
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import json
 from datetime import datetime, timezone
 from transformers import pipeline
+import functools
+import time
 
 # Import the database function
 from ai_studio_package.infra.db_enhanced import create_memory_from_post, get_db_connection, get_memory_node
+# Import the FAISS embedding function
+from ai_studio_package.infra.vector_adapter import generate_embedding_for_node_faiss 
 
 logger = logging.getLogger(__name__)
 
@@ -127,18 +131,20 @@ class TwitterTracker:
             logger.info("Finished Twitter scan cycle.")
             
     async def _scan_single_user(self, username: str, user_id_map: Dict[str, str]):
-        """Scans and processes tweets for a single user."""
-        # Ensure the username from the tracker list is also normalized AND lowercased for lookup
+        """Scans and processes tweets for a single user. Directly awaits the async get_user_tweets."""
         normalized_username = username.lstrip('@').strip().lower()
         logger.info(f"Checking account (normalized/lowercase): {normalized_username}")
-        user_db_id = user_id_map.get(normalized_username) # Use normalized lowercase key
+        user_db_id = user_id_map.get(normalized_username)
         if not user_db_id:
             logger.warning(f"User handle '{normalized_username}' (normalized from '{username}') not found in user_id_map keys: {list(user_id_map.keys())}. Skipping.")
             return
             
+        # loop = asyncio.get_running_loop() # No longer needed here
+
         try:
-            # Pass the original username format expected by the scraping method
-            tweets = await self.browser_manager.get_user_tweets(username) 
+            # --- Directly await the async get_user_tweets method ---
+            tweets = await self.browser_manager.get_user_tweets(username)
+            # --- End await ---
             
             if tweets:
                 logger.info(f"Found {len(tweets)} tweets for {username}. Processing...")
@@ -151,7 +157,7 @@ class TwitterTracker:
             logger.error(f"Error scanning account {username}: {e}", exc_info=True)
 
     async def process_tweets(self, user_db_id: str, tweets: List[dict], username_handle: str):
-        """Process tweets: create memory nodes, analyze sentiment, and insert into tables."""
+        """Process tweets: create memory nodes, analyze sentiment, insert into tables, and trigger embedding generation."""
         processed_count = 0
         skipped_existing_count = 0 # Count tweets already in tracked_tweets
         error_count = 0
@@ -159,25 +165,24 @@ class TwitterTracker:
         # Data collection lists
         memory_nodes_to_insert = []
         tracked_tweets_to_insert = []
+        # Store node_ids corresponding to successful preparations for embedding later
+        node_ids_to_embed = [] 
         tweet_ids_processed_in_batch = set() # Track IDs added in this batch
 
-        # --- Pre-fetch existing tweet IDs for this user to avoid checks inside loop --- 
+        # --- Pre-fetch existing tweet IDs for this user --- 
         existing_tweet_ids = set()
         conn_check = None
         try:
             conn_check = get_db_connection()
             cursor_check = conn_check.cursor()
-            # Fetch IDs for the current user being processed
             cursor_check.execute("SELECT tweet_id FROM tracked_tweets WHERE user_id = ?", (user_db_id,))
             existing_tweet_ids = {row[0] for row in cursor_check.fetchall()}
             logger.debug(f"Found {len(existing_tweet_ids)} existing tweet IDs for user {user_db_id} in tracked_tweets.")
         except Exception as check_err:
             logger.error(f"Error pre-fetching existing tweets for {user_db_id}: {check_err}")
-            # If check fails, we proceed but might insert duplicates if they exist 
-            # (INSERT OR IGNORE will handle it, but it's less efficient)
         finally:
             if conn_check: conn_check.close()
-        # --------------------------------------------------------------------------
+        # -------------------------------------------------
 
         for tweet in tweets:
             try:
@@ -192,7 +197,7 @@ class TwitterTracker:
                 node_id = f"tweet_{tweet_id_str}"
                 content_mem = tweet.get('content', '')
                 created_utc_mem = int(tweet['timestamp']) if tweet.get('timestamp') else int(datetime.now(timezone.utc).timestamp())
-                tags_mem = json.dumps(['tweet', 'twitter', username_handle]) # Simple tags for now
+                tags_mem = json.dumps(['tweet', 'twitter', username_handle])
                 metadata_mem = json.dumps({ 
                      'user_id': user_db_id,
                      'user_handle': username_handle,
@@ -212,7 +217,7 @@ class TwitterTracker:
                 ))
                 # ------------------------------------
 
-                # --- Prepare data for tracked_tweets --- 
+                # --- Prepare data for tracked_tweets (including sentiment/NER) --- 
                 content_trk = tweet.get('content', '')
                 date_posted_iso = tweet.get('timestamp_iso')
                 likes_trk = tweet.get('stats', {}).get('likes', 0)
@@ -220,161 +225,121 @@ class TwitterTracker:
                 replies_trk = tweet.get('stats', {}).get('replies', 0)
                 url_trk = tweet.get('url')
                 keywords_json_trk = json.dumps([]) 
-                sentiment_trk = None # Default to None
-                # <<< ANALYZE SENTIMENT >>>
+                sentiment_trk = None 
+                score_trk = None
+                keywords_list = []
+
+                # Run Sentiment Analysis (Consider running in executor if slow)
                 if self.sentiment_pipeline and content_trk:
                     try:
-                        # Pipelines often expect lists, even for single items
-                        # Truncate long tweets to avoid model errors (models have input limits)
-                        max_length = 512 # Common limit, adjust if needed
+                        max_length = 512 
                         truncated_content = content_trk[:max_length]
                         results = self.sentiment_pipeline(truncated_content) 
-                        # Result format is often [{'label': 'positive', 'score': 0.9...}]
                         if results and isinstance(results, list):
-                           # Map model labels (e.g., LABEL_0, LABEL_1, LABEL_2) to readable names
-                           # This mapping depends *highly* on the specific model!
-                           # For cardiffnlp/twitter-roberta-base-sentiment-latest:
-                           # label 0 -> negative
-                           # label 1 -> neutral
-                           # label 2 -> positive
                            raw_label = results[0]['label'].lower() 
-                           if raw_label == 'label_2' or raw_label == 'positive': # Check both just in case
+                           if raw_label == 'label_2' or raw_label == 'positive': 
                                sentiment_trk = 'positive'
+                               score_trk = 1.0
                            elif raw_label == 'label_1' or raw_label == 'neutral':
                                sentiment_trk = 'neutral'
+                               score_trk = 0.0
                            elif raw_label == 'label_0' or raw_label == 'negative':
                                sentiment_trk = 'negative'
+                               score_trk = -1.0
                            else:
-                               logger.warning(f"Unknown sentiment label from pipeline: {results[0]['label']}")
-                               sentiment_trk = results[0]['label'] # Store raw label if unknown
-                               
+                               logger.warning(f"Unknown sentiment label: {results[0]['label']}")
+                               sentiment_trk = results[0]['label']
                     except Exception as sentiment_err:
-                        logger.error(f"Error analyzing sentiment for tweet {tweet.get('id', 'N/A')}: {sentiment_err}", exc_info=False) # Avoid overly verbose logs
-                # <<< ADD Score Mapping >>>
-                score_trk = None # Default to None
-                if sentiment_trk == 'positive':
-                    score_trk = 1.0
-                elif sentiment_trk == 'negative':
-                    score_trk = -1.0
-                elif sentiment_trk == 'neutral':
-                    score_trk = 0.0
-                # --------------------------
+                        logger.error(f"Error analyzing sentiment for tweet {tweet_id_str}: {sentiment_err}", exc_info=False)
 
-                # <<< EXTRACT KEYWORDS/ENTITIES >>>
-                keywords_list = []
+                # Run NER (Consider running in executor if slow)
                 if self.ner_pipeline and content_trk:
                     try:
-                        # Truncate long tweets for NER model as well
-                        max_length_ner = 512 # Adjust if needed
+                        max_length_ner = 512 
                         truncated_content_ner = content_trk[:max_length_ner]
                         entities = self.ner_pipeline(truncated_content_ner)
-                        
-                        keywords_list = [] # Initialize keywords_list here
                         if entities and isinstance(entities, list):
-                           # Extract and filter the entity words 
                            raw_keywords = [entity['word'] for entity in entities 
                                            if entity.get('entity_group') in ['ORG', 'PER', 'LOC', 'MISC']]
-                           
-                           # Filter keywords
                            filtered_keywords = []
                            for kw in raw_keywords:
-                               # Corrected stripping logic
-                               cleaned_kw = kw.strip("'., ") # Strip common surrounding chars
-                               # <<< Refined Filter criteria >>>
-                               if (
-                                   len(cleaned_kw) >= 3 and
-                                   not cleaned_kw.startswith('#') and 
-                                   not cleaned_kw.startswith('@') and
-                                   any(c.isalpha() for c in cleaned_kw) # Ensure at least one letter
-                                  ): 
-                                    filtered_keywords.append(cleaned_kw) 
-                                    
-                           # Remove duplicates (case-insensitive for this example, adjust if needed)
+                               cleaned_kw = kw.strip("'., ")
+                               if len(cleaned_kw) >= 3 and not cleaned_kw.startswith('#') and not cleaned_kw.startswith('@') and any(c.isalpha() for c in cleaned_kw):
+                                    filtered_keywords.append(cleaned_kw)
                            seen = set()
                            unique_keywords = []
                            for kw_final in filtered_keywords:
                                if kw_final.lower() not in seen:
                                    seen.add(kw_final.lower())
                                    unique_keywords.append(kw_final)
-                           keywords_list = unique_keywords # Assign the final list
-                                           
+                           keywords_list = unique_keywords
                     except Exception as ner_err:
-                        logger.error(f"Error extracting entities for tweet {tweet.get('id', 'N/A')}: {ner_err}", exc_info=False)
-                        # Ensure keywords_list is empty on error
+                        logger.error(f"Error extracting entities for tweet {tweet_id_str}: {ner_err}", exc_info=False)
                         keywords_list = []
-                        
-                else: # Handle case where pipeline didn't load or no content
-                    keywords_list = []
-                    
-                keywords_json_trk = json.dumps(keywords_list) # Convert list to JSON string
-                # --------------------------------
+                keywords_json_trk = json.dumps(keywords_list)
+                # ------------------------------------------------------------------
                 
                 tracked_tweets_to_insert.append((
                     tweet_id_str, user_db_id, content_trk, date_posted_iso,
                     likes_trk, retweets_trk, replies_trk, url_trk,
-                    score_trk, sentiment_trk, keywords_json_trk # Ensure keywords_json_trk is included
+                    score_trk, sentiment_trk, keywords_json_trk
                 ))
                 # ---------------------------------------
 
-                tweet_ids_processed_in_batch.add(tweet_id_str) # Mark as processed for this batch
+                # If preparation succeeded, add node_id for embedding later
+                node_ids_to_embed.append(node_id) 
+                tweet_ids_processed_in_batch.add(tweet_id_str)
 
             except KeyError as ke:
-                 logger.error(f"Missing expected key in tweet data for user {username_handle}: {ke}. Tweet data: {tweet}", exc_info=True)
+                 logger.error(f"Missing key in tweet data for {username_handle}: {ke}. Tweet: {tweet}", exc_info=True)
                  error_count += 1
             except Exception as e:
-                logger.error(f"Error preparing tweet data {tweet.get('id', 'N/A')} for batch insert: {e}", exc_info=True)
+                logger.error(f"Error preparing tweet data {tweet.get('id', 'N/A')} for insert: {e}", exc_info=True)
                 error_count += 1
 
         # --- Perform Batch Inserts After Loop --- 
         conn = None
         inserted_memory_nodes = 0
         inserted_tracked_tweets = 0
+        actually_inserted_node_ids = [] # Store IDs that were definitely inserted
+
         if memory_nodes_to_insert or tracked_tweets_to_insert:
             try:
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                conn.execute("BEGIN") # Start transaction
+                conn.execute("BEGIN")
 
                 # Batch insert memory nodes
                 if memory_nodes_to_insert:
-                    logger.debug(f"Batch inserting {len(memory_nodes_to_insert)} memory nodes...")
                     cursor.executemany("""
                         INSERT OR IGNORE INTO memory_nodes 
                         (id, type, content, tags, created_at, source_id, source_type, metadata, has_embedding, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, memory_nodes_to_insert)
                     inserted_memory_nodes = cursor.rowcount
-                    logger.debug(f"Batch insert memory nodes complete. Rows affected: {inserted_memory_nodes}")
+                    # Store the IDs that were just prepared for insertion
+                    # We assume these correspond to the successful inserts if rowcount > 0
+                    if inserted_memory_nodes > 0:
+                        actually_inserted_node_ids = [node_data[0] for node_data in memory_nodes_to_insert]
 
                 # Batch insert tracked tweets
                 if tracked_tweets_to_insert:
-                    logger.debug(f"Preparing to batch insert {len(tracked_tweets_to_insert)} tracked tweets. First few:")
-                    for i, data_tuple in enumerate(tracked_tweets_to_insert[:3]): # Log first 3
-                        logger.debug(f"  Tuple {i}: ID={data_tuple[0]}, Content='{str(data_tuple[2])[:50]}...'")
-                    logger.debug(f"Batch inserting {len(tracked_tweets_to_insert)} tracked tweets...")
                     cursor.executemany("""
                         INSERT OR IGNORE INTO tracked_tweets 
                         (tweet_id, user_id, content, date_posted, engagement_likes, engagement_retweets, engagement_replies, url, score, sentiment, keywords)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, tracked_tweets_to_insert)
                     inserted_tracked_tweets = cursor.rowcount
-                    logger.debug(f"Batch insert tracked tweets complete. Rows affected: {inserted_tracked_tweets}")
-
-                # --- Log before/after commit --- 
-                logger.info("Attempting to commit transaction...")
-                conn.commit() # Commit transaction
-                logger.info("Transaction committed successfully.")
-                # --- End log --- 
                 
-                processed_count = inserted_tracked_tweets # Count successful tracked_tweet inserts as processed
-                logger.info(f"Batch inserts completed successfully.") # Keep this for overall confirmation
+                conn.commit()
+                logger.info(f"Batch inserts completed. MemoryNodes affected: {inserted_memory_nodes}, TrackedTweets affected: {inserted_tracked_tweets}")
+                processed_count = inserted_tracked_tweets
 
             except Exception as batch_err:
                 logger.error(f"Error during batch database inserts: {batch_err}", exc_info=True)
-                if conn: 
-                    logger.info("Rolling back transaction due to error...") # Log rollback
-                    conn.rollback() # Rollback transaction on error
-                error_count += len(memory_nodes_to_insert) + len(tracked_tweets_to_insert) # Count all potential inserts as errors
+                if conn: conn.rollback()
+                error_count += len(memory_nodes_to_insert) + len(tracked_tweets_to_insert)
+                actually_inserted_node_ids = [] # Clear list on error
             finally:
                 if conn:
                     conn.close()
@@ -382,18 +347,23 @@ class TwitterTracker:
             logger.info("No new tweets found to insert in this batch.")
         # ----------------------------------------
 
-        # Optional: Trigger embedding generation for newly inserted memory nodes
-        # This might still cause issues if generate_embedding_for_node is blocking or inefficient.
-        # Consider making embedding generation a separate background task queue.
-        # if inserted_memory_nodes > 0:
-        #     try:
-        #         new_node_ids = [node_data[0] for node_data in memory_nodes_to_insert]
-        #         logger.info(f"Triggering embedding generation for {inserted_memory_nodes} new nodes...")
-        #         # This needs refinement - how to efficiently generate for many?
-        #         # for node_id in new_node_ids:
-        #         #     asyncio.create_task(generate_embedding_for_node_async(node_id)) # If an async version exists
-        #     except Exception as embed_err:
-        #         logger.error(f"Error triggering embedding generation: {embed_err}")
+        # --- Trigger Embedding Generation for Newly Inserted Nodes --- 
+        if actually_inserted_node_ids:
+            logger.info(f"Triggering background embedding generation for {len(actually_inserted_node_ids)} new tweet nodes...")
+            loop = asyncio.get_running_loop()
+            embedding_tasks = []
+            for node_id in actually_inserted_node_ids:
+                # Schedule generate_embedding_for_node_faiss in an executor
+                task = loop.run_in_executor(
+                    None, # Use default ThreadPoolExecutor
+                    functools.partial(generate_embedding_for_node_faiss, node_id)
+                )
+                embedding_tasks.append(task)
+            
+            # Optionally wait for tasks to complete if needed, but usually not necessary here
+            # await asyncio.gather(*embedding_tasks)
+            logger.info(f"Scheduled {len(embedding_tasks)} embedding tasks.")
+        # ----------------------------------------------------------
         
         logger.info(f"Finished processing for {username_handle}. Inserted: {processed_count}, Skipped (Already Existed): {skipped_existing_count}, Errors: {error_count}")
         
@@ -468,3 +438,52 @@ class TwitterTracker:
         finally:
             if conn:
                 conn.close() 
+
+    async def insert_memory_node_async(self, conn, node_data: Dict[str, Any]) -> bool:
+        """Helper function to insert a memory node into the database asynchronously."""
+        try:
+             cursor = conn.cursor()
+             cursor.execute('''
+                 INSERT INTO memory_nodes (id, title, content, type, created_at, updated_at, has_embedding, tags, metadata)
+                 VALUES (:id, :title, :content, :type, :created_at, :updated_at, :has_embedding, :tags, :metadata)
+                 ON CONFLICT(id) DO NOTHING 
+             ''', node_data) # Use named placeholders
+             conn.commit() # Commit after each insert (can be optimized with batching)
+             return cursor.rowcount > 0 # Returns 1 if inserted, 0 if conflict/nothing happened
+        except Exception as insert_err:
+             logger.error(f"Error inserting memory node {node_data.get('id', 'N/A')}: {insert_err}")
+             conn.rollback() # Rollback on error
+             return False
+
+    def _should_check_account(self, account: str) -> bool:
+        """Check if an account should be checked based on rate limiting intervals."""
+        now = time.time()
+        last_check = self.last_check_times.get(account, 0)
+        interval = self.current_intervals.get(account, self.rate_limit_config['min_interval'])
+        
+        if now - last_check >= interval:
+            self.last_check_times[account] = now # Update last check time *before* the check
+            return True
+        else:
+            return False
+
+    def _update_check_interval(self, account: str, activity_count: int):
+        """Update the check interval for an account based on recent activity."""
+        current_interval = self.current_intervals.get(account, self.rate_limit_config['min_interval'])
+        config = self.rate_limit_config
+        
+        if activity_count >= config['activity_threshold']:
+            # High activity, decrease interval
+            new_interval = max(config['min_interval'], current_interval * config['recovery_factor'])
+        else:
+            # Low activity, increase interval
+            new_interval = min(config['max_interval'], current_interval * config['backoff_factor'])
+            
+        self.current_intervals[account] = new_interval
+        logger.debug(f"Updated check interval for {account} to {new_interval:.1f}s (activity: {activity_count})")
+        
+    def cleanup(self):
+        # ... (cleanup code remains the same) ...
+        pass
+
+    # ... (rest of the file) ... 

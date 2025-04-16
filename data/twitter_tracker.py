@@ -25,9 +25,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
+import random
 
 # Import our modules
-from ai_studio_package.infra.db_enhanced import create_memory_node, get_db_connection
+from ai_studio_package.infra.db_enhanced import create_memory_node, get_db_connection, create_memory_edge, get_memory_node
 from tools.burner_manager import BurnerManager
 
 # Load environment variables
@@ -35,6 +36,12 @@ load_dotenv()
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# --- Configuration Constants ---
+MIN_REPLIES_FOR_COMMENT_FETCH = 10
+MIN_LIKES_FOR_COMMENT_FETCH = 25
+# Add other thresholds if needed (retweets?)
+# TODO: Consider moving these to .env or a config file
 
 class TwitterTracker:
     """
@@ -49,6 +56,10 @@ class TwitterTracker:
         """
         Initialize the Twitter tracker.
         """
+        # Thresholds for fetching replies
+        self.min_replies_for_comment_fetch = MIN_REPLIES_FOR_COMMENT_FETCH
+        self.min_likes_for_comment_fetch = MIN_LIKES_FOR_COMMENT_FETCH
+
         # Load configuration from environment variables
         self.twitter_accounts = os.getenv('TWITTER_ACCOUNTS', '').split(',')
         self.twitter_accounts = [a.strip() for a in self.twitter_accounts if a.strip()]
@@ -254,6 +265,9 @@ class TwitterTracker:
                 return []
 
             # Process tweets
+            processed_count_for_debug = 0 # Counter for debug processing
+            max_tweets_to_debug = 3     # Process first 3 even if seen
+
             for tweet in tweets:
                 try:
                     # Check if tweet is pinned
@@ -264,45 +278,99 @@ class TwitterTracker:
                     # Get tweet ID from permalink
                     permalink = tweet.find_element(By.CLASS_NAME, "tweet-link")
                     tweet_url = permalink.get_attribute("href")
-                    tweet_id = tweet_url.split("/")[-1]
-                    
-                    # Skip if we've seen this tweet before
+                    # Extract ID robustly, handling potential query params
+                    tweet_id_match = re.search(r'/status/(\d+)', tweet_url)
+                    if not tweet_id_match:
+                        logger.warning(f"Could not extract tweet ID from URL: {tweet_url}")
+                        continue
+                    tweet_id = tweet_id_match.group(1)
+
+                    # --- TEMPORARY DEBUG LOGIC --- 
+                    is_new_tweet = True
                     if account in self.last_tweet_ids and tweet_id == self.last_tweet_ids[account]:
-                        break
-                    
+                        is_new_tweet = False
+                        # Original logic was to break here. We won't break for the first few.
+                        
+                    # Skip if we've seen this tweet AND we are past the debug count
+                    if not is_new_tweet and processed_count_for_debug >= max_tweets_to_debug:
+                         logger.debug(f"[Debug Skip] Breaking loop for {account} at tweet {tweet_id} (already seen and past debug count).")
+                         break # Stop processing older tweets for this account in this run
+                    # --- END TEMPORARY DEBUG LOGIC ---
+
                     # Get tweet content
                     content_elem = tweet.find_element(By.CLASS_NAME, "tweet-content")
                     tweet_text = content_elem.text
                     
                     # Get tweet timestamp
                     timestamp_elem = tweet.find_element(By.CLASS_NAME, "tweet-date")
-                    timestamp_url = timestamp_elem.get_attribute("href")
-                    timestamp_text = timestamp_elem.text
-                    
+                    # timestamp_url = timestamp_elem.get_attribute("href") # URL not needed directly
+                    timestamp_text = timestamp_elem.text # Keep original text representation
+
+                    # --- Scrape Engagement Data --- 
+                    replies = 0
+                    retweets = 0 # If needed later
+                    likes = 0
+                    try:
+                        stats_container = tweet.find_element(By.CLASS_NAME, "tweet-stats")
+                        
+                        # Replies (comment icon)
+                        reply_elem = stats_container.find_element(By.CSS_SELECTOR, ".icon-comment")
+                        reply_span = reply_elem.find_element(By.XPATH, "./following-sibling::span")
+                        replies_text = reply_span.text
+                        replies = int(replies_text.replace(',', '')) if replies_text else 0
+                        logger.debug(f"[Scrape Debug] Tweet {tweet_id}: Found replies text: '{replies_text}', Parsed replies: {replies}") # DEBUG LOG
+                        
+                        # Retweets (retweet icon)
+                        # retweet_elem = stats_container.find_element(By.CSS_SELECTOR, ".icon-retweet") 
+                        # retweet_span = retweet_elem.find_element(By.XPATH, "./following-sibling::span")
+                        # retweets = int(retweet_span.text.replace(',', '')) if retweet_span.text else 0
+                        
+                        # Likes (heart icon)
+                        like_elem = stats_container.find_element(By.CSS_SELECTOR, ".icon-heart")
+                        like_span = like_elem.find_element(By.XPATH, "./following-sibling::span")
+                        likes_text = like_span.text
+                        likes = int(likes_text.replace(',', '')) if likes_text else 0
+                        logger.debug(f"[Scrape Debug] Tweet {tweet_id}: Found likes text: '{likes_text}', Parsed likes: {likes}") # DEBUG LOG
+                        
+                    except Exception as scrape_err:
+                        # Log the error specifically for scraping engagement
+                        logger.warning(f"[Scrape Debug] Could not scrape engagement stats for tweet {tweet_id}: {scrape_err}")
+                    # --- End Scrape Engagement Data --- 
+
+                    # --- Increment Debug Counter ---
+                    processed_count_for_debug += 1 
+                    # --- End Increment Debug Counter ---
+
                     # Create tweet object
                     tweet_obj = {
-                        'id': f"twitter_{tweet_id}",
+                        'id': f"tweet_{tweet_id}", # Standardized ID prefix
                         'source': 'twitter',
                         'author': account,
                         'content': tweet_text,
                         'url': tweet_url,
-                        'created_utc': int(datetime.now().timestamp()),  # Approximate
+                        'replies': replies, # Added
+                        'likes': likes,     # Added
+                        # 'retweets': retweets, # Add if scraped
+                        'created_utc': int(datetime.now().timestamp()),  # Approximate, Nitter timestamp parsing is complex
                         'metadata': {
                             'tweet_id': tweet_id,
                             'timestamp_text': timestamp_text,
-                            'platform': 'twitter'
+                            'platform': 'twitter',
+                            'scraped_at': datetime.now().isoformat()
                         }
                     }
                     
                     # Add to new tweets
                     new_tweets.append(tweet_obj)
                     
-                    # If this is the first tweet, update last_tweet_ids
-                    if len(new_tweets) == 1:
+                    # If this is the first tweet processed in this batch for the account, 
+                    # update last_tweet_ids to prevent processing it again next time.
+                    if account not in self.last_tweet_ids or len(new_tweets) == 1: 
                         self.last_tweet_ids[account] = tweet_id
                 
                 except Exception as e:
-                    logger.error(f"Error processing tweet: {e}")
+                    # Log error processing a specific tweet but continue with others
+                    logger.error(f"Error processing a tweet from {account} (URL: {tweet_url if 'tweet_url' in locals() else 'unknown'}): {e}", exc_info=True)
             
             # Reverse the list so oldest tweets come first
             new_tweets.reverse()
@@ -395,83 +463,201 @@ class TwitterTracker:
         """
         logger.info("Starting Twitter scan cycle...")
         
-        # This connection should be managed carefully if scan runs continuously
-        # For simplicity, get a connection per scan cycle. Consider pooling for performance.
-        conn = get_db_connection()
-        if not conn:
-            logger.error("Failed to get DB connection for Twitter scan.")
-            return
+        if not self.driver:
+             logger.error("Browser not initialized. Cannot scan Twitter.")
+             return
+             
+        # Ensure DB connection handling is robust
+        conn = None 
+        try:
+             conn = get_db_connection()
+             if not conn:
+                 logger.error("Failed to get DB connection for Twitter scan cycle.")
+                 return
+        except Exception as db_err:
+             logger.error(f"Error getting DB connection: {db_err}")
+             return # Cannot proceed without DB
+        
+        all_processed_items = [] # To collect items from process_tweet
         
         try:
             for account in self.twitter_accounts:
-                logger.info(f"Checking account: {account}")
+                account_lower = account.lower() # Use lowercase for consistency internally
+                logger.info(f"Checking account: {account} ({account_lower})")
                 
                 # Apply rate limiting
-                if not self._should_check_account(account):
-                    logger.info(f"Skipping {account} due to rate limiting")
+                if not self._should_check_account(account_lower):
+                    logger.info(f"Skipping {account_lower} due to rate limiting")
                     continue
                 
                 try:
-                    # Check for new tweets using Selenium/Nitter
-                    new_tweets = self.check_account(account)  # This is synchronous
+                    # Fetch raw tweet data from BrowserManager
+                    # Returns list of dicts: {'id', 'content', 'timestamp_iso', 'stats': {'replies', 'likes', ...}, 'url'}
+                    new_tweets_raw = await self.check_account(account_lower)
+                    logger.info(f"Found {len(new_tweets_raw)} raw tweets for {account}. Processing...")
+
+                    if not new_tweets_raw:
+                        logger.info(f"No raw tweets returned from BrowserManager for {account}.")
+                        self._update_check_interval(account_lower, 0) # Update interval even if no tweets
+                        continue
+
+                    # --- TEMPORARY DEBUG: Process first few regardless of DB status --- 
+                    processed_for_debug_count = 0
+                    max_to_process_for_debug = 3 
+                    # --- END TEMP DEBUG --- 
+
+                    # Get existing IDs from DB *once* for efficiency
+                    tweet_ids_to_check = [t.get('id') for t in new_tweets_raw if t.get('id')]
+                    # Helper function assumed to exist or needs to be created:
+                    # def get_existing_tweet_node_ids(conn, tweet_ids): 
+                    #    placeholders = ','join('?' * len(tweet_ids))
+                    #    node_ids = [f'tweet_{tid}' for tid in tweet_ids]
+                    #    cursor = conn.execute(f"SELECT id FROM memory_nodes WHERE id IN ({placeholders})", node_ids)
+                    #    return {row['id'] for row in cursor.fetchall()} 
+                    # For now, we will check individually, which is less efficient
+                    # existing_tweet_node_ids = set(get_existing_tweet_node_ids(conn, tweet_ids_to_check))
+                    # logger.debug(f"Checked {len(tweet_ids_to_check)} tweet IDs against DB for {account}.")
                     
-                    # Update rate limiting based on activity
-                    self._update_check_interval(account, len(new_tweets))
-                    
-                    # Process and store new tweets
                     stored_count = 0
-                    for tweet_data in new_tweets:
-                        # Structure data for memory node
-                        node_content = tweet_data.get('content', '')
-                        node_source_id = tweet_data.get('id')  # Nitter's internal ID? or actual tweet ID? Check check_account
-                        node_metadata = {
-                            'platform': 'twitter',
-                            'url': tweet_data.get('url'),
-                            'author': tweet_data.get('author'),
-                            'account': account,  # The account being scanned
-                            'likes': tweet_data.get('likes'),
-                            'retweets': tweet_data.get('retweets'),
-                            'comments': tweet_data.get('comments'),
-                            'timestamp_utc': tweet_data.get('timestamp'),  # Assuming check_account provides UTC timestamp
-                            # Add other relevant fields from tweet_data if needed
+                    skipped_count = 0
+                    error_count = 0
+                    
+                    for tweet_data_raw in new_tweets_raw:
+                        tweet_id_numeric = tweet_data_raw.get('id')
+                        if not tweet_id_numeric:
+                            logger.warning("Skipping tweet due to missing ID from BrowserManager.")
+                            error_count += 1
+                            continue
+                            
+                        tweet_node_id = f"tweet_{tweet_id_numeric}"
+                        
+                        # --- Check if node exists (less efficient than bulk check) ---
+                        existing_node = get_memory_node(tweet_node_id) # Assumes get_memory_node handles its own connection/cursor
+                        node_exists_in_db = existing_node is not None
+                        # --- End Check ---
+                        
+                        # --- TEMPORARY DEBUG: Check if processing is forced --- 
+                        force_process_for_debug = processed_for_debug_count < max_to_process_for_debug
+                        # --- END TEMP DEBUG --- 
+                        
+                        # Original check: Skip if tweet already exists AND we are not forcing debug processing
+                        if node_exists_in_db and not force_process_for_debug:
+                            skipped_count += 1
+                            continue # Skip this tweet if already in DB and not forced
+
+                        # --- If we reach here, we process the tweet (either new or forced for debug) ---
+                        processed_for_debug_count += 1 # Increment debug counter if processed
+
+                        # 1. Prepare data for memory node (map from BrowserManager format)
+                        tweet_stats = tweet_data_raw.get('stats', {})
+                        timestamp_iso = tweet_data_raw.get('timestamp_iso')
+                        created_at_timestamp = int(time.time()) # Default to current time as int
+                        if timestamp_iso:
+                            try:
+                                dt_obj = datetime.fromisoformat(timestamp_iso.replace('Z', '+00:00'))
+                                created_at_timestamp = int(dt_obj.timestamp())
+                            except (ValueError, TypeError) as ts_err:
+                                logger.warning(f"Could not parse ISO timestamp '{timestamp_iso}': {ts_err}. Using current time.")
+
+                        # Define node_data dictionary correctly
+                        node_data = {
+                            'id': tweet_node_id,
+                            'type': 'tweet',
+                            'content': tweet_data_raw.get('content', ''),
+                            'tags': ['tweet', account],
+                            'created_at': created_at_timestamp,
+                            'source_id': tweet_id_numeric,
+                            'source_type': 'twitter_tweet',
+                            'metadata': {
+                                'tweet_id': tweet_id_numeric,
+                                'timestamp_iso': timestamp_iso,
+                                'url': tweet_data_raw.get('url'),
+                                'platform': 'twitter',
+                                'author': account,
+                                'scraped_at': datetime.now().isoformat(),
+                                'replies': tweet_stats.get('replies', 0),
+                                'likes': tweet_stats.get('likes', 0),
+                                'retweets': tweet_stats.get('retweets', 0),
+                                'quotes': tweet_stats.get('quotes', 0)
+                            }
                         }
+
+                        # Log before storing (only if it wasn't skipped)
+                        logger.info(f"Processing tweet {tweet_node_id} (Exists: {node_exists_in_db}, Forced: {force_process_for_debug})")
                         
-                        # Process for keywords/contracts - maybe add tags?
-                        # detected = self.process_tweet(tweet_data)
-                        # node_tags = [item['data']['keyword'] for item in detected if item['type'] == 'keyword']
-                        # For now, keep tags simple or omit
-                        node_tags = ['twitter', account]
+                        # 2. Store/Update the original tweet as a memory node
+                        # Using create_memory_node which handles its own connection implicitly
+                        # We might need UPDATE logic if we want to update existing nodes when force_process_for_debug is True
+                        created_node_id = None
+                        if not node_exists_in_db:
+                             created_node_id = create_memory_node(node_data) 
                         
-                        # Store tweet as memory node
-                        node_id = create_memory_node(
-                            conn=conn,
-                            node_type='tweet',
-                            content=node_content,
-                            source_id=node_source_id,
-                            source_type='twitter',
-                            metadata=node_metadata,
-                            tags=node_tags
-                            # embedding=None # Embedding generation happens elsewhere
-                        )
-                        if node_id:
-                            logger.info(f"Stored tweet node: {node_id} from account {account}")
-                            stored_count += 1
-                        else:
-                            logger.error(f"Failed to store tweet node for tweet {node_source_id} from account {account}")
+                        # Proceed if node was newly created OR if it existed but we forced processing
+                        if created_node_id or (node_exists_in_db and force_process_for_debug):
+                            if created_node_id:
+                                stored_count += 1
+                                logger.info(f"Stored NEW tweet {tweet_node_id} as memory node {created_node_id}")
+                            else:
+                                # If forced and already exists, log differently or update node if needed
+                                logger.info(f"Re-processing EXISTING tweet {tweet_node_id} for reply check.")
+                                # Optional: Update existing node metadata if desired
+                                # from ai_studio_package.infra.db_enhanced import update_memory_node 
+                                # update_memory_node({'id': tweet_node_id, 'metadata': node_data['metadata']}) # Example update
+                                pass
+
+                            # 3. Process tweet for keywords/contracts (existing logic)
+                            processed_items = self.process_tweet(node_data)
+                            all_processed_items.extend(processed_items)
+                            
+                            # 4. Check for high traction and fetch replies if needed
+                            replies = tweet_stats.get('replies', 0)
+                            likes = tweet_stats.get('likes', 0)
+                            
+                            # --- Log Engagement Data Before Check --- 
+                            logger.debug(f"[Threshold Check] Tweet {tweet_node_id}: Checking traction with Replies={replies}, Likes={likes}")
+                            # --- End Log --- 
+                            
+                            if (replies >= self.min_replies_for_comment_fetch or 
+                                likes >= self.min_likes_for_comment_fetch):
+                                logger.info(f"High traction detected for tweet {tweet_node_id} (Replies: {replies}, Likes: {likes}). Fetching replies...")
+                                # Pass the necessary data (URL, Node ID) from node_data
+                                fetch_data = {
+                                    'url': node_data['metadata']['url'],
+                                    'id': node_data['id'] # Pass the node ID (e.g., tweet_123)
+                                }
+                            await self._fetch_and_process_replies(fetch_data) 
+                            
+                        elif not created_node_id and not node_exists_in_db:
+                             # This case means create_memory_node failed for a non-existing node
+                            logger.error(f"Failed to store NEW tweet {tweet_node_id} as memory node.")
+                            error_count += 1
+                            
+                    logger.info(f"Finished processing for {account}. Inserted: {stored_count}, Skipped (Already Existed): {skipped_count}, Errors: {error_count}")
                     
-                    # Log action (replace old log_action if necessary)
-                    logger.info(f"Checked account {account}, found {len(new_tweets)} new tweets, stored {stored_count} nodes.")
+                    # Update overall check interval for the account based on *raw* tweets found
+                    self._update_check_interval(account_lower, len(new_tweets_raw))
                     
-                    # Add a delay between accounts to avoid rate limiting/overloading nitter
-                    await asyncio.sleep(5)  # Keep the async sleep
-                
+                    # Add delay between accounts
+                    await asyncio.sleep(random.uniform(3, 7)) # Use async sleep
+
                 except Exception as e:
-                    logger.error(f"Error scanning account {account}: {e}")
-        
+                    logger.error(f"Error processing account {account}: {e}", exc_info=True)
+                    # Continue to the next account even if one fails
+
+            # --- Optional: Process all detected items after scanning all accounts ---
+            # logger.info(f"Processing {len(all_processed_items)} detected items (keywords/contracts)...")
+            # for item in all_processed_items:
+            #     # Handle contracts, keywords etc.
+            #     pass
+            
+        except Exception as e:
+            logger.error(f"Unexpected error during Twitter scan cycle: {e}", exc_info=True)
         finally:
-            if conn:
+            if conn: 
                 conn.close()
-        logger.info("Finished Twitter scan cycle.")
+                logger.info("Closed main DB connection for Twitter scan cycle.")
+                
+        logger.info("Twitter scan cycle finished.")
     
     def cleanup(self):
         """
@@ -558,6 +744,154 @@ class TwitterTracker:
         except Exception as e:
             logger.error(f"Unexpected error during user search: {e}")
             return []
+
+    async def _fetch_and_process_replies(self, original_tweet_data: Dict[str, Any]):
+        """
+        Fetches replies for a high-traction tweet using Selenium/Nitter 
+        and processes them.
+        
+        Args:
+            original_tweet_data: Dictionary containing data of the original tweet,
+                                 including its 'url' and 'id'.
+        """
+        tweet_url = original_tweet_data.get('url')
+        original_tweet_node_id = original_tweet_data.get('id') # e.g., tweet_12345
+        
+        if not tweet_url or not original_tweet_node_id:
+            logger.error("Missing URL or ID in original tweet data for fetching replies.")
+            return
+
+        logger.info(f"Attempting to fetch replies for tweet: {tweet_url}")
+
+        try:
+            # Navigate to the individual tweet page
+            self.driver.get(tweet_url)
+            
+            # Wait for the main tweet and potentially replies to load
+            # We might need more specific waits depending on Nitter's structure
+            wait = WebDriverWait(self.driver, 15)
+            # Wait for the original tweet content to ensure the page is loaded
+            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "main-tweet")))
+            # Try to find reply elements (adjust selector as needed)
+            reply_elements = self.driver.find_elements(By.CSS_SELECTOR, ".reply .timeline-item") # Example selector
+            
+            logger.info(f"Found {len(reply_elements)} potential reply elements for {original_tweet_node_id}")
+            
+            processed_count = 0
+            for reply_element in reply_elements:
+                try:
+                    reply_data = self._extract_reply_data(reply_element, original_tweet_node_id)
+                    if reply_data:
+                        self._process_reply(reply_data, original_tweet_node_id)
+                        processed_count += 1
+                except Exception as e:
+                    logger.warning(f"Error processing a single reply element for {original_tweet_node_id}: {e}")
+            
+            logger.info(f"Processed {processed_count} replies for tweet {original_tweet_node_id}.")
+
+        except TimeoutException:
+            logger.error(f"Timeout loading replies page: {tweet_url}")
+            # Consider rotating instance or just logging
+        except WebDriverException as e:
+            logger.error(f"Browser error fetching replies for {tweet_url}: {e}")
+            # Consider trying to recover the browser
+        except Exception as e:
+            logger.error(f"Unexpected error fetching replies for {tweet_url}: {e}", exc_info=True)
+            
+    def _extract_reply_data(self, reply_element, original_tweet_id: str) -> Optional[Dict[str, Any]]:
+        """Extracts data from a single reply HTML element."""
+        try:
+            # Extract reply ID (often part of the permalink)
+            permalink_elem = reply_element.find_element(By.CLASS_NAME, "tweet-link")
+            reply_url = permalink_elem.get_attribute("href")
+            reply_id_match = re.search(r'/status/(\d+)', reply_url)
+            reply_id = reply_id_match.group(1) if reply_id_match else f"unknown_{int(time.time()*1000)}"
+            
+            # Extract author handle
+            author_elem = reply_element.find_element(By.CLASS_NAME, "username")
+            author = author_elem.text
+            
+            # Extract content
+            content_elem = reply_element.find_element(By.CLASS_NAME, "tweet-content")
+            content = content_elem.text
+            
+            # Extract timestamp (optional, might be complex)
+            timestamp_text = "unknown"
+            try:
+                timestamp_elem = reply_element.find_element(By.CLASS_NAME, "tweet-date")
+                timestamp_text = timestamp_elem.text
+            except Exception:
+                pass # Ignore if timestamp isn't found
+                
+            return {
+                'id': reply_id,
+                'author': author,
+                'text': content,
+                'url': reply_url,
+                'timestamp_text': timestamp_text
+            }
+            
+        except Exception as e:
+            logger.warning(f"Could not extract data from a reply element for {original_tweet_id}: {e}")
+            return None
+            
+    def _process_reply(self, reply_data: Dict[str, Any], original_tweet_node_id: str):
+        """
+        Processes extracted reply data, creates memory node and edge.
+        """
+        reply_id = reply_data['id']
+        original_tweet_id_numeric = original_tweet_node_id.replace('tweet_', '') # Get original ID number
+
+        # Create Memory Node for the reply
+        node_id = f"twitter_reply_{reply_id}"
+        node_data = {
+            'id': node_id,
+            'type': 'tweet_reply',
+            'content': reply_data['text'],
+            'tags': ['reply', 'twitter', reply_data.get('author', 'unknown')],
+            'created_at': int(datetime.now().timestamp()), # Use scrape time
+            'source_id': reply_id,
+            'source_type': 'tweet_reply',
+            'metadata': {
+                'original_tweet_id': original_tweet_id_numeric,
+                'original_tweet_node_id': original_tweet_node_id,
+                'author': reply_data.get('author', 'unknown'),
+                'reply_url': reply_data.get('url'),
+                'timestamp_text': reply_data.get('timestamp_text'),
+                'scraped_at': datetime.now().isoformat(),
+                # Placeholder for future AI analysis
+                'sentiment': None,
+                'keywords': []
+            }
+        }
+
+        created_node_id = create_memory_node(node_data)
+
+        if created_node_id:
+            logger.info(f"Stored reply node: {created_node_id} (reply to {original_tweet_node_id})")
+
+            # Create Memory Edge linking reply to original tweet
+            edge_id = f"edge_reply_{reply_id}_to_{original_tweet_id_numeric}"
+            edge_data = {
+                'id': edge_id,
+                'source_node_id': created_node_id,  # The reply node
+                'target_node_id': original_tweet_node_id, # The original tweet node
+                'label': 'reply_to',
+                'weight': 1.0,
+                'created_at': int(datetime.now().timestamp()),
+                'metadata': {
+                    'type': 'structural_link'
+                }
+            }
+            
+            edge_created = create_memory_edge(edge_data)
+            
+            if edge_created:
+                logger.info(f"Created edge: {edge_id} linking reply to original tweet.")
+            else:
+                logger.error(f"Failed to create edge {edge_id} linking reply to original tweet.")
+        else:
+            logger.error(f"Failed to store reply node for reply ID {reply_id} (reply to {original_tweet_node_id})")
 
 # Example usage
 if __name__ == "__main__":

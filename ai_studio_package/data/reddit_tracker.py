@@ -14,10 +14,12 @@ import logging
 import asyncio
 import praw
 import prawcore
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dotenv import load_dotenv
 import json
+import time
+import functools
 
 # Import shared modules - ensure these functions exist in db_enhanced
 from ai_studio_package.infra.db_enhanced import (
@@ -26,8 +28,11 @@ from ai_studio_package.infra.db_enhanced import (
     remove_tracked_subreddit,
     get_tracked_subreddits_with_state, # Expects name, last_scanned_post_id, is_active
     update_subreddit_scan_state,
-    insert_reddit_posts
+    insert_reddit_posts,
+    create_memory_node
 )
+from ai_studio_package.infra.summarizer import SummarizationPipelineSingleton
+from ai_studio_package.infra.vector_adapter import generate_embedding_for_node_faiss
 
 # Load environment variables
 load_dotenv()
@@ -87,6 +92,8 @@ class RedditTracker:
         except Exception as e:
             logger.error(f"Failed to initialize PRAW: {e}", exc_info=True)
             self.reddit = None
+
+        self._initialize_summarizer()
 
     async def get_tracked_subreddits(self) -> List[Dict[str, Any]]:
         """Fetches the list of currently tracked subreddits from the DB."""
@@ -457,6 +464,343 @@ class RedditTracker:
     #          # Ensure task is marked as None even if callback has issues
     #          if self.running_task is task:
     #              self.running_task = None
+
+    def _initialize_summarizer(self):
+        """Helper to initialize summarizer, called from init."""
+        try:
+            logger.info("Initializing summarizer pipeline for RedditTracker...")
+            # Access the singleton instance
+            self.summarizer_pipeline = SummarizationPipelineSingleton.get_pipeline()
+            self.summarizer_tokenizer = SummarizationPipelineSingleton.get_tokenizer()
+            if not self.summarizer_pipeline or not self.summarizer_tokenizer:
+                logger.error("Failed to get summarization pipeline or tokenizer from Singleton.")
+                self.summarizer_pipeline = None
+                self.summarizer_tokenizer = None
+            else:
+                logger.info("Summarizer pipeline obtained successfully.")
+        except Exception as e:
+            logger.error(f"Error initializing summarizer pipeline: {e}", exc_info=True)
+            self.summarizer_pipeline = None
+            self.summarizer_tokenizer = None
+
+    async def _scan_single_subreddit(self, subreddit_name: str):
+        # ... (logic to get PRAW subreddit object) ...
+        last_scanned_id = None # Fetch this from DB for the subreddit
+        conn_state = None
+        try:
+            # Fetch state before fetching posts
+            conn_state = get_db_connection()
+            # Assuming get_tracked_subreddits_with_state filters by name or you fetch one
+            sub_state = next((s for s in get_tracked_subreddits_with_state(conn_state) if s['name'] == subreddit_name), None)
+            if sub_state:
+                last_scanned_id = sub_state.get('last_scanned_post_id')
+            logger.info(f"Scanning r/{subreddit_name} for posts newer than ID: {last_scanned_id}")
+        except Exception as state_err:
+            logger.error(f"Error fetching scan state for r/{subreddit_name}: {state_err}")
+            # Optionally proceed without last_scanned_id or return
+        finally:
+            if conn_state: conn_state.close()
+
+        new_submissions = []
+        newest_post_id_in_scan = last_scanned_id
+        # --- ADD PRINT 1 --- 
+        print(f"DEBUG PRINT 1: Entering main try block for r/{subreddit_name}")
+        # --- END PRINT 1 ---
+        try:
+            subreddit = self.reddit.subreddit(subreddit_name)
+            params = {"limit": 100} # Fetch more posts
+            if last_scanned_id:
+                params["before"] = f"t3_{last_scanned_id}"
+
+            def fetch_new_posts_sync(): 
+                return list(subreddit.new(params=params))
+            
+            fetched_submissions = await asyncio.to_thread(fetch_new_posts_sync)
+            
+            if not fetched_submissions:
+                logger.info(f"No new posts found in r/{subreddit_name} since {last_scanned_id}.")
+                return
+
+            # Find the actual newest ID from the fetched batch
+            local_newest_id = None
+            max_created = 0
+            for sub in fetched_submissions:
+                if sub.created_utc > max_created:
+                    max_created = sub.created_utc
+                    local_newest_id = sub.id
+            
+            if local_newest_id: # Update overall newest ID if a newer one was found
+                newest_post_id_in_scan = local_newest_id
+
+            logger.info(f"Found {len(fetched_submissions)} new posts in r/{subreddit_name}. Processing...")
+            conn = None
+            # --- ADD PRINT 2 --- 
+            print(f"DEBUG PRINT 2: Immediately before DB transaction try block for r/{subreddit_name}")
+            # --- END PRINT 2 ---
+            try:
+                # --- Add logging --- 
+                logger.info(f"--> Getting DB connection for r/{subreddit_name} processing...")
+                conn = get_db_connection()
+                logger.info(f"--> DB connection obtained for r/{subreddit_name}. Starting transaction...")
+                conn.execute("BEGIN") # Start transaction
+                logger.info(f"--> Transaction BEGUN for r/{subreddit_name}.")
+                # --- End logging ---
+
+                # Step 1: Store raw posts (using the implemented helper)
+                logger.info(f"--> Calling _store_raw_posts for r/{subreddit_name}...") # Log before call
+                raw_insert_count = self._store_raw_posts(conn, subreddit_name, fetched_submissions)
+                logger.info(f"--> _store_raw_posts finished for r/{subreddit_name}. Inserted count: {raw_insert_count}") # Log after call
+
+                # --- Add specific checkpoint log --- 
+                logger.info(f"--> CHECKPOINT: Immediately before calling summarize/embed for r/{subreddit_name}.")
+                # --- End checkpoint log ---
+
+                # --- Add logging before and after summarization call ---
+                logger.info(f"--->>> Attempting to summarize and embed {len(fetched_submissions)} posts for r/{subreddit_name}...")
+                # Step 2: Summarize and embed (passing the same connection)
+                await self._summarize_and_embed_posts(conn, subreddit_name, fetched_submissions)
+                logger.info(f"--->>> Finished call to _summarize_and_embed_posts for r/{subreddit_name}.")
+                # --- End logging addition ---
+                
+                # Step 3: Commit transaction after all processing for this sub
+                conn.commit()
+                logger.info(f"Committed DB changes for r/{subreddit_name}.")
+
+            except Exception as processing_err:
+                logger.error(f"Error during DB operations for r/{subreddit_name}: {processing_err}", exc_info=True)
+                if conn: 
+                    logger.warning(f"Rolling back transaction for r/{subreddit_name}")
+                    conn.rollback()
+            finally:
+                if conn:
+                    conn.close()
+            
+            # Step 4: Update scan state *after* successful commit
+            if newest_post_id_in_scan and newest_post_id_in_scan != last_scanned_id:
+                conn_update = None
+                try:
+                    conn_update = get_db_connection()
+                    update_subreddit_scan_state(conn_update, subreddit_name, newest_post_id_in_scan)
+                    conn_update.commit()
+                    logger.info(f"Updated last scanned ID for r/{subreddit_name} to {newest_post_id_in_scan}")
+                except Exception as update_err:
+                     logger.error(f"Failed to update scan state for r/{subreddit_name}: {update_err}")
+                     if conn_update: conn_update.rollback()
+                finally: 
+                     if conn_update: conn_update.close()
+            else:
+                 logger.info(f"Last scanned ID for r/{subreddit_name} remains {last_scanned_id} (no newer posts processed or commit failed).")
+
+        except (prawcore.exceptions.NotFound, prawcore.exceptions.Redirect) as praw_err:
+             logger.error(f"Subreddit r/{subreddit_name} not found or invalid during scan: {praw_err}")
+             # Consider marking as inactive in DB?
+        except Exception as e:
+            logger.error(f"Error scanning subreddit r/{subreddit_name}: {e}", exc_info=True)
+
+    # --- Implement the raw post storage logic --- 
+    def _store_raw_posts(self, conn, subreddit_name: str, new_submissions: List[Any]) -> int:
+        """Stores raw post data into the reddit_posts table using the provided connection."""
+        posts_to_insert = []
+        logger.debug(f"[_store_raw_posts] Preparing raw post data for r/{subreddit_name}...") # Log entry
+        for submission in new_submissions:
+            try:
+                created_dt = datetime.fromtimestamp(submission.created_utc, tz=timezone.utc)
+                post_data = {
+                    "id": submission.id,
+                    "subreddit": subreddit_name.lower(),
+                    "title": submission.title,
+                    "author": getattr(submission.author, 'name', '[deleted]'),
+                    "created_utc": created_dt.isoformat(), # Store as ISO string
+                    "score": submission.score,
+                    "upvote_ratio": submission.upvote_ratio,
+                    "num_comments": submission.num_comments,
+                    "permalink": f"https://www.reddit.com{submission.permalink}",
+                    "url": submission.url,
+                    "selftext": submission.selftext[:4000] if submission.selftext else None, # Limit length
+                    "is_self": submission.is_self,
+                    "is_video": submission.is_video,
+                    "over_18": submission.over_18,
+                    "spoiler": submission.spoiler,
+                    "stickied": submission.stickied,
+                    "scraped_at": datetime.now(timezone.utc).isoformat()
+                }
+                posts_to_insert.append(post_data)
+            except Exception as prep_err:
+                logger.warning(f"Could not prepare raw post data for {submission.id}: {prep_err}")
+        
+        if not posts_to_insert:
+            logger.info(f"[_store_raw_posts] No valid posts prepared for insertion for r/{subreddit_name}.")
+            return 0
+        logger.info(f"[_store_raw_posts] Prepared {len(posts_to_insert)} posts for insertion for r/{subreddit_name}.")
+
+        try:
+            logger.info(f"[_store_raw_posts] Attempting batch insert via insert_reddit_posts for r/{subreddit_name}...")
+            inserted_count = insert_reddit_posts(conn, posts_to_insert)
+            # The commit is handled by the caller (_scan_single_subreddit)
+            logger.info(f"[_store_raw_posts] insert_reddit_posts call completed for r/{subreddit_name}. DB reported count: {inserted_count}")
+            return inserted_count
+        except Exception as insert_err:
+            logger.error(f"[_store_raw_posts] Error during insert_reddit_posts call for r/{subreddit_name}: {insert_err}", exc_info=True) # Log full exception
+            # Rollback is handled by the caller
+            return 0
+
+    async def _summarize_and_embed_posts(self, conn, subreddit_name: str, new_submissions: List[Any]):
+        """Generates summaries, stores them as memory nodes, and triggers embedding."""
+        if not self.summarizer_pipeline or not self.summarizer_tokenizer:
+            logger.error("Summarizer not available, cannot process posts for embedding.")
+            return
+
+        loop = asyncio.get_running_loop()
+        processed_count = 0
+        failed_count = 0
+        # Keep track of node IDs inserted in this batch within the transaction
+        inserted_node_ids_in_batch = [] 
+
+        for submission in new_submissions:
+            try:
+                post_id = submission.id
+                title = submission.title
+                selftext = submission.selftext
+                text_to_summarize = f"{title}\n\n{selftext}".strip()
+
+                if not text_to_summarize:
+                    logger.info(f"Skipping summary for post {post_id} (no text content)." )
+                    continue
+
+                # --- Run Summarization in Executor --- 
+                try:
+                    summary_text = await loop.run_in_executor(
+                        None, # Default ThreadPoolExecutor
+                        functools.partial(self._run_summarization_sync, text_to_summarize)
+                    )
+                    if not summary_text:
+                        logger.warning(f"Summarization returned empty for post {post_id}. Skipping node creation.")
+                        failed_count += 1
+                        continue 
+                except Exception as summ_err:
+                    logger.error(f"Error during summarization for post {post_id}: {summ_err}")
+                    failed_count += 1
+                    continue # Skip this post if summarization fails
+                # --- End Summarization --- 
+                
+                # --- Prepare Summary Memory Node Data --- 
+                node_id = f"reddit_summary_{post_id}"
+                tags = ['reddit', 'summary', subreddit_name]
+                metadata = {
+                    'original_post_id': post_id,
+                    'source_type': 'reddit',
+                    'subreddit': subreddit_name,
+                    'title': title,
+                    'author': str(submission.author) if submission.author else None,
+                    'upvotes': submission.score,
+                    'num_comments': submission.num_comments,
+                    'url': submission.url,
+                    'permalink': submission.permalink,
+                    'model_used': SummarizationPipelineSingleton.get_model_name(), 
+                    'fetched_at': int(time.time()),
+                    'created_utc': int(submission.created_utc)
+                }
+                
+                memory_node_data = {
+                    "id": node_id,
+                    "type": "reddit_summary",
+                    "content": summary_text, # Use the generated summary
+                    "tags": json.dumps([t for t in tags if t]),
+                    "created_at": int(submission.created_utc),
+                    "updated_at": int(time.time()),
+                    "source_id": submission.permalink, # Use permalink as source_id maybe?
+                    "source_type": "reddit",
+                    "metadata": json.dumps(metadata),
+                    "has_embedding": 0
+                }
+                # --- End Prepare Data --- 
+
+                # --- Insert Summary Node (using helper) --- 
+                # Pass the connection
+                inserted = await self.insert_memory_node_async(conn, memory_node_data)
+                # --- End Insert --- 
+                
+                if inserted:
+                    processed_count += 1
+                    # Add the ID to list for embedding *after* commit
+                    inserted_node_ids_in_batch.append(memory_node_data["id"])
+                else:
+                    failed_count += 1
+
+            except Exception as post_proc_err:
+                logger.error(f"Error processing post {submission.id} for summary/embedding: {post_proc_err}", exc_info=True)
+                failed_count += 1
+        
+        # -- Commit is handled by the CALLER (_scan_single_subreddit) --
+        # -- We don't commit or rollback here inside the loop --
+        
+        # --- Trigger Embedding AFTER successful commit (done in caller) --- 
+        # We return the list of IDs that should be embedded
+        logger.info(f"Finished preparing summaries for r/{subreddit_name}. Successful: {processed_count}, Failed/Skipped: {failed_count}")
+        # --- Return list of node IDs that were successfully prepared and inserted --- 
+        # Embedding trigger will happen in the caller after commit
+        # return inserted_node_ids_in_batch <<-- Modify _scan_single_subreddit to handle this return
+
+        # --- Revised Approach: Trigger Embedding Here --- 
+        # If insert_memory_node_async succeeded (returned True), trigger embedding
+        # This assumes insert_memory_node_async doesn't rely on an external commit 
+        # (which it shouldn't if using ON CONFLICT DO NOTHING or similar)
+        if inserted_node_ids_in_batch:
+            logger.info(f"Triggering background embedding for {len(inserted_node_ids_in_batch)} summary nodes from r/{subreddit_name}...")
+            for node_id in inserted_node_ids_in_batch:
+                 loop.run_in_executor(
+                    None, 
+                    functools.partial(generate_embedding_for_node_faiss, node_id)
+                 )
+        # --- End Trigger Embedding --- 
+
+    def _run_summarization_sync(self, text: str) -> Optional[str]:
+        """Synchronous helper to run the summarization pipeline."""
+        if not self.summarizer_pipeline or not self.summarizer_tokenizer:
+            return None
+        try:
+            # Truncate input based on tokenizer limits
+            max_input_length = getattr(self.summarizer_tokenizer, 'model_max_length', 1024)
+            safe_max_length = max_input_length - 10 
+            inputs = self.summarizer_tokenizer(text, return_tensors='pt', max_length=safe_max_length, truncation=True)
+            truncated_text = self.summarizer_tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True)
+
+            if len(truncated_text) < 5: # Basic check if input is too short after truncation
+                 return None
+                 
+            # Adjust summarization parameters as needed
+            summary_result = self.summarizer_pipeline(truncated_text, max_length=150, min_length=20, do_sample=False)
+            return summary_result[0]['summary_text']
+        except Exception as e:
+            logger.error(f"Summarization pipeline error: {e}")
+            return None
+
+    # --- Add the async DB insert helper if it doesn't exist --- 
+    async def insert_memory_node_async(self, conn, node_data: Dict[str, Any]) -> bool:
+        """Helper function to insert a memory node into the database.
+           Uses the passed connection.
+        """
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            # Use INSERT OR IGNORE or ON CONFLICT DO NOTHING to handle duplicates gracefully
+            cursor.execute("""
+                INSERT INTO memory_nodes (id, type, content, tags, created_at, updated_at, source_id, source_type, metadata, has_embedding)
+                VALUES (:id, :type, :content, :tags, :created_at, :updated_at, :source_id, :source_type, :metadata, :has_embedding)
+                ON CONFLICT(id) DO NOTHING
+            """, node_data)
+            # commit happens in the calling function (_scan_single_subreddit) after all processing
+            # conn.commit() # DO NOT commit here if batching or called within transaction
+            # Return True if insert happened (rowcount > 0), False otherwise (conflict or error)
+            return cursor.rowcount > 0
+        except Exception as insert_err:
+            logger.error(f"DB Error inserting memory node {node_data.get('id', 'N/A')}: {insert_err}")
+            # Rollback might be handled by the caller if part of a larger transaction
+            # conn.rollback()
+            return False
+        # finally:
+            # Cursor is managed by the connection passed in
+            # if cursor: cursor.close()
 
 # Example usage block (inactive by default)
 async def _test_main():

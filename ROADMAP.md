@@ -8,6 +8,21 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ## Feature Roadmap
 
+### Current Focus: Phase 4 Prerequisite
+
+#### 7. Actionable Nodes [CURRENT FOCUS]
+- **Priority**: Highest
+- **Effort**: Medium (2x)
+- **Impact**: 40x operational speed
+- **Description**: Add context menu to nodes with actions like "Summarize," "Generate post," "Find similar," "Execute agent". Transforms the graph into an active workspace.
+- **Implementation**:
+  - Create right-click context menu component
+  - Define standard action set for all node types
+  - Implement node-type-specific actions
+  - Connect actions to existing API endpoints (summarization, search, agents)
+  - Add visual feedback for action execution
+  - Create action history panel (optional V2)
+
 ### Phase 1: Foundation Enhancements
 
 #### 1. Live Semantic Query Highlighting
@@ -22,15 +37,16 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Highlight connecting paths between highly similar nodes
   - Add visual legend for similarity scale
 
-#### 2. Memory Weight / Attention Encoding
+#### 2. Memory Weight / Attention Encoding [Backend Complete]
 - **Priority**: High
-- **Effort**: Low (1x)
+- **Effort**: Low (1x) -> Low (0.5x Frontend/Logic Remaining)
 - **Impact**: 25x visibility into system focus
-- **Description**: Vary node/edge size or opacity based on importance, recent activation, or frequency of use
+- **Description**: Vary node/edge size or opacity based on importance, recent activation, or frequency of use. Backend endpoint `/nodes/weights` implemented.
 - **Implementation**:
-  - Extend memory node schema with `activation_score` and `last_accessed` fields
-  - Create node sizing function based on these metrics
-  - Implement decay function for activation over time
+  - Extend memory node schema with `activation_score` and `last_accessed` fields (Done via metadata)
+  - Create node sizing function based on these metrics (`calculateNodeSize` in frontend - Needs Connection)
+  - Implement tracking logic in `/nodes/track-access` endpoint
+  - Implement decay function for activation over time (Optional V2)
   - Add toggle for different sizing metrics (frequency, recency, importance)
 
 ### Phase 2: Interaction & Debugging
@@ -87,19 +103,6 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ### Phase 4: Advanced Interactions
 
-#### 7. Actionable Nodes
-- **Priority**: High
-- **Effort**: Medium (2x)
-- **Impact**: 40x operational speed
-- **Description**: Add context menu to nodes with actions like "Summarize," "Generate post," "Find similar," "Execute agent"
-- **Implementation**:
-  - Create right-click context menu component
-  - Define standard action set for all node types
-  - Implement node-type-specific actions
-  - Connect actions to existing API endpoints
-  - Add visual feedback for action execution
-  - Create action history panel
-
 #### 8. Graph AI Copilot
 - **Priority**: High
 - **Effort**: Medium (2x)
@@ -115,9 +118,12 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ## Implementation Strategy
 
-### Quick Wins (Next 2 Weeks)
+### Current Focus
+- **Actionable Nodes**: Target completion in the next 1-2 weeks.
+
+### Quick Wins (Next 2 Weeks - Post Actionable Nodes)
+- Finish Memory Weight / Attention Encoding (Frontend/Logic)
 - Live Semantic Query Highlighting
-- Memory Weight / Attention Encoding
 
 ### Short-Term (1 Month)
 - Agent Trace Mode
@@ -128,9 +134,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 - Memory Mode Toggle
 
 ### Long-Term (3-6 Months)
-- Actionable Nodes
 - Graph AI Copilot
-- Vector Database Migration
 - Model Routing System
 - Token Cost Tracking
 - Memory Pruning Logic
@@ -138,33 +142,34 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ## Technical Dependencies
 
-1. Ensure vector embedding consistency across all node types
-2. Create unified node access tracking system
-3. Standardize metadata schema for all memory objects
-4. Implement efficient graph rendering optimizations for larger datasets
-5. Develop consistent interaction patterns for graph elements
+1. Ensure vector embedding consistency across all node types (Addressed by FAISS migration)
+2. Create unified node access tracking system (Partially done with `/track-access` endpoint)
+3. Standardize metadata schema for all memory objects (Ongoing)
+4. Implement efficient graph rendering optimizations for larger datasets (Ongoing)
+5. Develop consistent interaction patterns for graph elements (Key for Actionable Nodes)
 
 ## Success Metrics
 
 - **Graph Engagement**: Time spent interacting with visual memory
+- **Action Efficiency**: Reduction in clicks/time to perform tasks via Actionable Nodes
 - **Agent Effectiveness**: Reduction in steps needed to complete tasks
 - **User Comprehension**: Ability to explain agent reasoning and connections
 - **Development Velocity**: Speed of implementing new features using the enhanced system
-- **Knowledge Quality**: Measured improvement in content generation using graph-derived context 
+- **Knowledge Quality**: Measured improvement in content generation using graph-derived context
 
 ## System Efficiency Enhancements
 
-### 1. Vector Database Migration (SQLite → FAISS/Chroma)
-- **Priority**: High
-- **Effort**: Medium (2x)
+### 1. Vector Database Migration (SQLite → FAISS) [Largely Complete]
+- **Priority**: High -> Completed
+- **Effort**: Medium (2x) -> Done
 - **Impact**: 50x query speed, 25x scalability
-- **Description**: Replace SQLite-based vector storage with dedicated vector database to handle growing volumes of embeddings
+- **Description**: Replace SQLite-based vector storage with dedicated vector database (FAISS). Includes adapter layer (`vector_adapter.py`), store manager (`VectorStoreManager`), and migration script (`migrate_to_faiss.py`). Enhanced `db_enhanced.py`.
 - **Implementation**:
-  - Integrate FAISS or Chroma as primary vector storage
-  - Migrate existing embeddings from SQLite to vector DB
-  - Update semantic search interface to leverage vector DB capabilities
-  - Replace memory node access logic for faster retrieval
-  - Add index optimization for different query patterns
+  - Integrate FAISS as primary vector storage (Done)
+  - Migrate existing embeddings from SQLite to vector DB (Script created, needs final run/validation)
+  - Update semantic search interface to leverage vector DB capabilities (Done via adapter)
+  - Replace memory node access logic for faster retrieval (Done via adapter)
+  - Add index optimization for different query patterns (Future refinement)
 
 ### 2. Model Routing System
 - **Priority**: High
@@ -226,49 +231,41 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Develop automated agent improvement based on performance data
   - Build visualization tools to track system evolution
 
-## Next Asymmetrical Execution Opportunity
+## Next Asymmetrical Execution Opportunity [Updated Focus]
 
-### Vector Database Migration: The 50x Accelerator
+### Actionable Nodes: The Interactive Workspace
+With the FAISS vector database migration largely complete and providing a high-performance foundation, the next highest leverage opportunity is **Actionable Nodes**. This feature transforms the graph from a passive view into an active control surface.
 
-The Vector Database Migration represents our highest-impact, relatively low-effort opportunity for immediate focus. With GPU acceleration now enabled and Twitter/Reddit agents successfully ingesting content, the SQLite-based storage is becoming the primary bottleneck to system performance and scalability.
-
-#### Why This Is Asymmetrical (High Impact / Manageable Effort):
-- **Current Foundation**: We already have working embeddings and semantic search
-- **Plug-and-Play**: FAISS and Chroma offer drop-in replacements with minimal code changes
-- **Immediate Benefits**: Query speed improves from linear to logarithmic complexity
-- **Enables Next Steps**: Unlocks the potential for memory pruning and advanced retrieval patterns
-- **Future-Proof**: Scales to millions of records without degradation
+#### Why This Is Asymmetrical Now (High Impact / Manageable Effort):
+- **Foundation Ready**: Leverages the stable FAISS backend, reliable agents (Twitter/Reddit), and existing API endpoints (summarization, search).
+- **Direct User Value**: Immediately makes the graph more useful and reduces context switching.
+- **Synergy**: Combines visualization with operational capabilities, embodying the "AI Studio" concept.
+- **Enables Next Steps**: Provides a natural interface for triggering more complex workflows like the Graph AI Copilot later.
 
 #### Expected Outcomes:
-- **Performance**: 50x faster semantic search queries
-- **Scale**: Support for 100x more memory nodes than current implementation
-- **Features**: Enables similarity clustering, k-nearest neighbors, and dimensional reduction
-- **Quality**: Improved relevance in multi-hop memory retrieval
-- **Development**: Cleaner abstraction between storage and application logic
+- **Performance**: Faster task execution by initiating actions directly from graph context.
+- **UX**: Significantly reduced clicks and navigation required for common operations.
+- **Integration**: Tighter coupling between visual memory exploration and agent/tool execution.
+- **Development**: Establishes UI patterns for direct graph interaction.
 
-#### Getting Started:
+#### Getting Started (Next 1-2 Weeks):
+1.  **Design Context Menu (Day 1)**
+    - Define standard actions (Summarize, Find Similar, Delete?)
+    - Define type-specific actions (e.g., "View Original Tweet/Post", "Generate Reply")
+    - Sketch UI look and feel.
+2.  **Implement Frontend Menu Component (Day 2-4)**
+    - Use a library (e.g., react-contextmenu) or build custom.
+    - Trigger menu on node right-click.
+    - Pass node ID and type to menu actions.
+3.  **Connect Actions to APIs (Day 5-8)**
+    - Wire menu options to call relevant backend endpoints (`/api/summary/`, `/api/memory/semantic-search`, agent endpoints).
+    - Handle API responses (e.g., display summary, highlight similar nodes).
+4.  **Add Visual Feedback (Day 9-10)**
+    - Show loading indicators during action execution.
+    - Provide confirmation messages (e.g., "Summary generated").
+5.  **Testing & Refinement (Day 11-14)**
+    - Test across different node types.
+    - Ensure smooth user experience.
+    - Gather feedback.
 
-1. **Evaluate Vector DB Options (Day 1-2)**
-   - Compare FAISS (performance-oriented) vs. Chroma (developer-friendly)
-   - Assess Python client library compatibility
-   - Consider persistence requirements and backup strategy
-
-2. **Prototype Migration Path (Day 3-5)**
-   - Create standalone script to export SQLite embeddings
-   - Implement vector DB connection class
-   - Build simple import function for existing embeddings
-   - Test retrieval accuracy against current implementation
-
-3. **Implement Core Integration (Day 6-10)**
-   - Create VectorStoreManager class as abstraction layer
-   - Update db_enhanced.py to use new vector store for embeddings
-   - Maintain dual-write mode during transition
-   - Add metrics collection to measure performance improvement
-
-4. **Validate and Deploy (Day 11-14)**
-   - Comprehensive testing with existing memory nodes
-   - Performance benchmarking with large datasets
-   - Implement rollback capability if issues arise
-   - Deploy with monitoring for query times and resource usage
-
-This execution plan leverages our current GPU-accelerated foundation to achieve transformative performance improvements with a focused, two-week implementation window. 
+This shifts our immediate focus to delivering a core interactive enhancement, building directly on the performance gains from the FAISS migration. 

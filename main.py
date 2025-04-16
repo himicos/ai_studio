@@ -159,6 +159,9 @@ from data.reddit_tracker import RedditTracker as RedditAgentTracker
 app.include_router(settings_router, prefix="/api", tags=["settings"])
 app.include_router(twitter_router, prefix="/api/twitter", tags=["twitter"])
 app.include_router(prompts_router, prefix="/api/prompts", tags=["prompts"])
+# --- DEBUG PRINT: Confirm memory router inclusion --- 
+print("--- Including memory_router from main.py ---")
+# --- END DEBUG PRINT ---
 app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(marketing_agent_router, prefix="/api/marketing-agent", tags=["Marketing Agent"])
 app.include_router(twitter_agent_router)

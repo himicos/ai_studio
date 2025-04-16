@@ -7,7 +7,7 @@ Handles querying, filtering, and visualization of the knowledge graph.
 
 import logging
 from typing import Dict, List, Optional, Any, Union
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel, Field
 from datetime import datetime
 import openai
@@ -15,10 +15,15 @@ import numpy as np
 import json
 import uuid # For generating temporary IDs if needed or using DB IDs directly
 
+# --- DEBUG PRINT: Confirm file is loaded ---
+print("--- Loading ai_studio_package/web/routes/memory.py ---")
+# --- END DEBUG PRINT ---
+
 # Import controllers and database functions
 from ai_studio_package.infra.db_enhanced import (
     get_memory_nodes, create_memory_node, get_db_connection, get_vector_db_connection,
-    init_db, init_vector_db, create_memory_edge, get_memory_edges, get_memory_node, get_memory_edge, get_memory_stats
+    init_db, init_vector_db, create_memory_edge, get_memory_edges, get_memory_node, get_memory_edge, get_memory_stats,
+    update_memory_node, update_memory_node_metadata
 )
 
 class MemoryController:
@@ -186,6 +191,62 @@ logger = logging.getLogger("ai_studio.memory")
 
 # Create router
 router = APIRouter()
+
+# --- ADDED Endpoint for Node Weights/Metadata (MOVED TO TOP) --- 
+# print("--- About to define /nodes/weights (at top) ---") # <-- Remove debug print
+@router.get("/nodes/weights", response_model=Dict[str, Dict[str, Any]])
+async def get_node_metadata_for_weights():
+    """
+    Retrieves metadata for all nodes, primarily for graph visualization weighting.
+    Returns a dictionary where keys are node IDs and values are metadata dicts.
+    """
+    # print("--- /nodes/weights function EXECUTED ---") # <-- Remove debug print
+    # --- Restore original implementation --- 
+    logger.info("Request received for node weights/metadata.")
+    all_nodes_metadata = {}
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Ensure metadata column exists and is selected
+        cursor.execute("SELECT id, metadata FROM memory_nodes")
+        rows = cursor.fetchall()
+        conn.close()
+        conn = None # Mark as closed
+        
+        for row in rows:
+            node_id = row['id']
+            metadata_json = row['metadata']
+            try:
+                metadata = json.loads(metadata_json) if metadata_json else {}
+                # Ensure essential keys needed by frontend exist, even if null/default
+                all_nodes_metadata[node_id] = {
+                    'importance': metadata.get('importance'), # Might be None
+                    'last_accessed': metadata.get('last_accessed'), # Might be None
+                    'access_count': metadata.get('access_count', 0) # Default to 0
+                    # Add any other relevant metadata fields here
+                }
+            except json.JSONDecodeError:
+                 logger.warning(f"Could not parse metadata JSON for node {node_id}")
+                 all_nodes_metadata[node_id] = {'importance': None, 'last_accessed': None, 'access_count': 0} # Default
+            except Exception as inner_e:
+                 logger.error(f"Error processing metadata for node {node_id}: {inner_e}")
+                 all_nodes_metadata[node_id] = {'importance': None, 'last_accessed': None, 'access_count': 0} # Default
+                 
+        logger.info(f"Returning metadata for {len(all_nodes_metadata)} nodes.")
+        # Return the populated dictionary (or empty if no nodes)
+        return all_nodes_metadata
+        
+    except Exception as e:
+        logger.error(f"Error fetching node metadata for weights: {e}", exc_info=True)
+        if conn:
+             try:
+                 conn.close() # Ensure connection closed on error
+             except Exception as close_err:
+                 logger.error(f"Error closing DB connection during exception handling: {close_err}")
+        # Raising 500 provides clearer backend error signal.
+        raise HTTPException(status_code=500, detail="Failed to retrieve node metadata for weights.")
+    # pass # <-- Remove pass
 
 # Create memory controller instance
 memory_controller = MemoryController()
@@ -693,3 +754,157 @@ Ensure the output is valid JSON. Do not include any explanations or text outside
     except Exception as e:
         logger.error(f"Unexpected error during knowledge graph generation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred during graph generation.")
+
+# --- Pydantic Models --- #
+
+# Reuse models from api.ts where possible or define here
+class MemoryNodeModel(BaseModel):
+    id: str
+    type: str
+    content: str
+    tags: Optional[List[str]] = []
+    created_at: int
+    source_id: Optional[str] = None
+    source_type: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = {}
+    has_embedding: Optional[bool] = False
+    updated_at: Optional[int] = None
+
+class MemoryEdgeModel(BaseModel):
+    id: str
+    source_node_id: str
+    target_node_id: str
+    label: str
+    weight: Optional[float] = 1.0
+    created_at: int
+    metadata: Optional[Dict[str, Any]] = {}
+    
+# Payload for tracking node access (matches api.ts)
+class NodeAccessPayload(BaseModel):
+    node_id: str
+    access_type: str # view, edit, use_in_prompt, search_result
+    access_weight: Optional[float] = 1.0 # Default weight
+    
+# Response model for node metadata update
+class NodeMetadataUpdateResponse(BaseModel):
+    node_id: str
+    updated_metadata: Dict[str, Any]
+
+# --- Routes --- #
+
+@router.get("/nodes", response_model=List[MemoryNodeModel])
+async def get_all_nodes(
+    limit: int = Query(100, ge=1, le=1000, description="Number of nodes to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    node_type: Optional[str] = Query(None, description="Filter by node type"),
+    search_query: Optional[str] = Query(None, description="Filter by content search")
+    # Add tag filtering if needed
+):
+    """Retrieve a list of memory nodes with optional filtering and pagination."""
+    try:
+        nodes_data = get_memory_nodes(
+            limit=limit, 
+            offset=offset, 
+            node_type=node_type,
+            search_query=search_query
+            # Pass tag filters here if implemented
+        )
+        # Pydantic automatically validates the list of dicts against MemoryNodeModel
+        return nodes_data
+    except Exception as e:
+        logger.error(f"Error retrieving memory nodes: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error retrieving nodes.")
+
+@router.get("/nodes/{node_id}", response_model=MemoryNodeModel)
+async def get_single_node(node_id: str):
+    """Retrieve a single memory node by its ID."""
+    node = get_memory_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node with ID {node_id} not found.")
+    return node
+
+@router.post("/nodes", response_model=MemoryNodeModel, status_code=201)
+async def add_new_node(node: MemoryNodeModel):
+    """Create a new memory node."""
+    # Pydantic model ensures basic structure. Convert back to dict for DB function.
+    node_dict = node.dict()
+    created_id = create_memory_node(node_dict)
+    if not created_id:
+        raise HTTPException(status_code=500, detail="Failed to create memory node.")
+    
+    # Fetch the created node to return the full object
+    new_node = get_memory_node(created_id)
+    if not new_node:
+         # This case should be rare if creation succeeded
+         raise HTTPException(status_code=500, detail="Created node but failed to retrieve it.")
+    return new_node
+
+@router.get("/edges", response_model=List[MemoryEdgeModel])
+async def get_all_edges(
+    limit: int = Query(100, ge=1, le=1000, description="Number of edges to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    source_node_id: Optional[str] = Query(None, description="Filter by source node ID"),
+    target_node_id: Optional[str] = Query(None, description="Filter by target node ID"),
+    label: Optional[str] = Query(None, description="Filter by edge label")
+):
+    """Retrieve a list of memory edges with optional filtering and pagination."""
+    try:
+        edges_data = get_memory_edges(
+            limit=limit, 
+            offset=offset,
+            source_node_id=source_node_id,
+            target_node_id=target_node_id,
+            label=label
+        )
+        return edges_data
+    except Exception as e:
+        logger.error(f"Error retrieving memory edges: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error retrieving edges.")
+
+@router.post("/edges", response_model=MemoryEdgeModel, status_code=201)
+async def add_new_edge(edge: MemoryEdgeModel):
+    """Create a new memory edge."""
+    edge_dict = edge.dict()
+    success = create_memory_edge(edge_dict)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to create memory edge.")
+    
+    # Fetch the created edge to return the full object
+    new_edge = get_memory_edge(edge_dict['id'])
+    if not new_edge:
+         raise HTTPException(status_code=500, detail="Created edge but failed to retrieve it.")
+    return new_edge
+
+# --- ADDED Endpoint --- 
+@router.post("/nodes/track-access", status_code=200)
+async def track_node_access_endpoint(payload: NodeAccessPayload):
+    """Receives node access information from the frontend."""
+    logger.info(f"Received node access tracking call: Node ID={payload.node_id}, Type={payload.access_type}, Weight={payload.access_weight}")
+    
+    # --- Placeholder for future logic --- 
+    # Here you would typically:
+    # 1. Validate the node_id exists (optional but good practice)
+    # node = get_memory_node(payload.node_id)
+    # if not node:
+    #     logger.warning(f"track-access called for non-existent node ID: {payload.node_id}")
+    #     # Decide whether to raise 404 or just ignore
+    #     # raise HTTPException(status_code=404, detail="Node not found")
+    #     return {"message": "Node not found, access not tracked."}
+    
+    # 2. Update node metadata or a separate tracking table based on payload
+    # Example: Increment an access count or update a last_accessed timestamp
+    # success = update_node_metadata(payload.node_id, {
+    #     f"access_{payload.access_type}_count": node['metadata'].get(f"access_{payload.access_type}_count", 0) + 1, 
+    #     'last_accessed': datetime.now().isoformat()
+    # })
+    # if not success:
+    #      logger.error(f"Failed to update metadata for node {payload.node_id} during track-access")
+    #      # Consider raising 500 or just logging
+    # --- End Placeholder --- 
+    
+    # For now, just acknowledge receipt
+    return {"message": f"Access tracked for node {payload.node_id}"}
+
+# Add other memory-related routes here (e.g., update node, delete node, etc.)
+
+print("--- Finished loading ai_studio_package/web/routes/memory.py ---")

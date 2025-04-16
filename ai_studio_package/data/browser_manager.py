@@ -17,6 +17,7 @@ from datetime import datetime as dt # Import datetime directly
 import pytz # Import pytz for timezone handling
 from bs4 import BeautifulSoup
 import re
+import functools # Add functools import
 
 logger = logging.getLogger(__name__)
 
@@ -93,120 +94,121 @@ class BrowserManager:
             raise
     
     async def get_user_tweets(self, username: str, max_tweets: int = 50) -> List[dict]:
-        """Get tweets for a specific user using enhanced browser."""
+        """Get tweets for a specific user using enhanced browser. Runs blocking Selenium calls in an executor."""
+        
+        # Run the core blocking logic in an executor
+        loop = asyncio.get_running_loop()
+        try:
+            tweets = await loop.run_in_executor(
+                None, # Use default ThreadPoolExecutor
+                functools.partial(self._get_user_tweets_sync, username, max_tweets)
+            )
+            return tweets
+        except Exception as e:
+            logger.error(f"Error executing _get_user_tweets_sync in executor: {e}", exc_info=True)
+            return [] # Return empty list on executor error
+
+    # --- New Synchronous Helper Method --- 
+    def _get_user_tweets_sync(self, username: str, max_tweets: int) -> List[dict]:
+        """Synchronous helper method containing the blocking Selenium logic."""
         if not self.driver:
             try:
-                self.driver = self.setup_driver()
+                # Note: setup_driver itself might block briefly, acceptable here as it runs in executor
+                self.driver = self.setup_driver() 
             except Exception as setup_err:
-                 logger.error(f"Failed to setup driver, cannot get tweets: {setup_err}")
-                 return [] # Return empty on setup failure
+                 logger.error(f"Failed to setup driver in executor, cannot get tweets: {setup_err}")
+                 return [] 
             
         # Use the hardcoded instance
         url = f"{self.nitter_instance}/{username}"
-        logger.info(f"Navigating to Nitter URL: {url}")
+        logger.info(f"[Executor] Navigating to Nitter URL: {url}")
         
         try:
             self.driver.get(url)
             
-            # Apply navigator.webdriver fix after page load
-            logger.info("Applying navigator.webdriver fix...")
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            time.sleep(0.5) # Small delay after script execution
+            # --- Temporarily comment out the webdriver fix ---
+            # logger.info("[Executor] Applying navigator.webdriver fix...")
+            # self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            # time.sleep(0.5) 
+            # --- End temporary comment out ---
 
-            # Wait for the first tweet item to load within the timeline
             tweet_item_selector = "div.timeline-item" 
-            logger.info(f"Waiting for the first tweet item ({tweet_item_selector}) to be present...")
+            logger.info(f"[Executor] Waiting for the first tweet item ({tweet_item_selector}) ...")
             try:
-                WebDriverWait(self.driver, 10).until(  # Reduced from 30 to 10 seconds
+                # --- Increase Timeout --- 
+                WebDriverWait(self.driver, 20).until( # Increased timeout to 20 seconds
                     EC.presence_of_element_located((By.CSS_SELECTOR, tweet_item_selector))
                 )
-                logger.info("First tweet item found. Finding all tweet bodies...")
+                # --- End Increase Timeout ---
+                logger.info("[Executor] First tweet item found. Finding all tweet bodies...")
             except TimeoutException:
-                logger.error(f"Timeout waiting for tweets to load for user {username} on {self.nitter_instance}")
-                return []  # Return empty list on timeout
+                logger.error(f"[Executor] Timeout waiting for tweets for user {username} on {self.nitter_instance}")
+                # Optional: Log page source on timeout for debugging selectors
+                # try:
+                #    logger.debug(f"[Timeout Debug] Page source for {username}:\n{self.driver.page_source[:2000]}")
+                # except:
+                #    pass 
+                return []  
             
-            # Find tweet *bodies* now, as they contain content, date, stats
             tweets = []
-            tweet_elements = self.driver.find_elements(By.CSS_SELECTOR, "div.tweet-body") # Find tweet bodies
-            logger.info(f"Found {len(tweet_elements)} elements with class 'tweet-body'.")
+            tweet_elements = self.driver.find_elements(By.CSS_SELECTOR, "div.tweet-body") 
+            logger.info(f"[Executor] Found {len(tweet_elements)} elements with class 'tweet-body'.")
             
-            # Adjust parsing loop to work relative to tweet-body
             for body in tweet_elements[:max_tweets]:
                 tweet_id = None 
                 tweet_url = None
                 timestamp_iso = None
                 tweet_stats = {'replies': 0, 'retweets': 0, 'likes': 0, 'quotes': 0 }
+                logger.debug(f"[Executor Scrape Debug] Processing tweet body...") 
                 try:
-                    # --- Parse ID & URL--- 
                     parent_item = body.find_element(By.XPATH, "..") 
                     link_element = parent_item.find_element(By.CSS_SELECTOR, "a.tweet-link")
                     href = link_element.get_attribute("href")
                     if href:
                         tweet_id = href.split("/")[-1].split("#")[0]
-                        # Construct full Nitter URL from relative href
                         tweet_url = f"{self.nitter_instance}{href}" 
 
-                    # --- Parse Content --- 
                     content_element = body.find_element(By.CSS_SELECTOR, "div.tweet-content")
-                    # Use JavaScript to get textContent, which often handles complex nodes better
                     tweet_content = self.driver.execute_script("return arguments[0].textContent;", content_element)
-                    if tweet_content: 
-                        tweet_content = tweet_content.strip()
-                    else:
-                        tweet_content = "" # Ensure it's an empty string if null/undefined
-                        
-                    logger.debug(f"Parsed content for tweet {tweet_id}: '{tweet_content[:100]}...'" )
+                    tweet_content = tweet_content.strip() if tweet_content else ""
+                    logger.debug(f"[Executor] Parsed content for tweet {tweet_id}: '{tweet_content[:100]}...'" )
 
-                    # --- Parse Date --- 
-                    timestamp_iso = None # Initialize
+                    timestamp_iso = None
                     try:
                         date_element = body.find_element(By.CSS_SELECTOR, "span.tweet-date a") 
-                        date_title = date_element.get_attribute("title") # e.g., "Apr 14, 2025 · 9:47 PM UTC"
+                        date_title = date_element.get_attribute("title")
                         if date_title:
-                            # Nitter format: Month Day, Year · Hour:Minute AM/PM UTC
-                            # Python format code: %b %d, %Y · %I:%M %p UTC
-                            date_str_cleaned = date_title.replace(" UTC", "") # Remove UTC suffix
-                            # Use strptime with the specific format
+                            date_str_cleaned = date_title.replace(" UTC", "")
                             dt_obj = dt.strptime(date_str_cleaned, "%b %d, %Y · %I:%M %p")
-                            # Assume UTC and make timezone-aware
                             dt_obj_utc = pytz.utc.localize(dt_obj)
-                            timestamp_iso = dt_obj_utc.isoformat() # Convert to ISO 8601 string
+                            timestamp_iso = dt_obj_utc.isoformat()
                     except ValueError as date_fmt_err:
-                        logger.warning(f"Could not parse date for tweet {tweet_id} using specific format: {date_fmt_err}. Raw: '{date_title}'")
-                        timestamp_iso = None # Default to None if parsing fails
+                        logger.warning(f"[Executor] Could not parse date fmt for tweet {tweet_id}: {date_fmt_err}. Raw: '{date_title}'")
                     except Exception as date_err:
-                         logger.warning(f"General error parsing date for tweet {tweet_id}: {date_err}")
-                         timestamp_iso = None # Default to None if parsing fails
+                         logger.warning(f"[Executor] General error parsing date for tweet {tweet_id}: {date_err}")
+                         timestamp_iso = None
 
-                    # --- Parse Stats --- 
                     try:
                         stats_container = body.find_element(By.CSS_SELECTOR, "div.tweet-stats")
                         stat_spans = stats_container.find_elements(By.CSS_SELECTOR, "span.tweet-stat")
                         for span in stat_spans:
-                            icon_div = span.find_element(By.CSS_SELECTOR, "div.icon-container span[class^='icon-']") # Find the icon span
+                            icon_div = span.find_element(By.CSS_SELECTOR, "div.icon-container span[class^='icon-']")
                             icon_class = icon_div.get_attribute("class")
-                            stat_text = span.text.strip() # Get the text next to the icon
+                            stat_text = span.text.strip()
                             count = 0
-                            if stat_text: # Check if there is text (count)
+                            if stat_text:
                                 try:
-                                    count = int(stat_text.replace(",", "")) # Convert text count to int
+                                    count = int(stat_text.replace(",", ""))
                                 except ValueError:
-                                    count = 0 # Default to 0 if text isn't a number
-                            
-                            if "icon-comment" in icon_class:
-                                tweet_stats['replies'] = count
-                            elif "icon-retweet" in icon_class:
-                                tweet_stats['retweets'] = count
-                            elif "icon-heart" in icon_class:
-                                tweet_stats['likes'] = count
-                            elif "icon-quote" in icon_class:
-                                tweet_stats['quotes'] = count
-                                
+                                    count = 0
+                            if "icon-comment" in icon_class: tweet_stats['replies'] = count
+                            elif "icon-retweet" in icon_class: tweet_stats['retweets'] = count
+                            elif "icon-heart" in icon_class: tweet_stats['likes'] = count
+                            elif "icon-quote" in icon_class: tweet_stats['quotes'] = count
+                        logger.debug(f"[Executor Scrape Debug] Tweet {tweet_id}: Parsed Stats: {tweet_stats}")
                     except Exception as stats_err:
-                        logger.warning(f"Could not parse stats for tweet {tweet_id}: {stats_err}")
-                        # Keep default stats if parsing fails
+                        logger.warning(f"[Executor] Could not parse stats for tweet {tweet_id}: {stats_err}")
                     
-                    # --- Construct Data --- 
                     tweet_data = {
                         'id': tweet_id,
                         'content': tweet_content,
@@ -217,24 +219,24 @@ class BrowserManager:
                     if tweet_id: 
                          tweets.append(tweet_data)
                     else:
-                         logger.warning("Skipping tweet due to missing ID.")
+                         logger.warning("[Executor] Skipping tweet due to missing ID.")
                          
                 except Exception as e:
-                    logger.error(f"Error parsing tweet body (ID={tweet_id}): {e}", exc_info=True)
+                    logger.error(f"[Executor] Error parsing tweet body (ID={tweet_id}): {e}", exc_info=True)
                     continue
                     
             return tweets
             
         except TimeoutException:
-            logger.error(f"Timeout waiting for tweets to load for user {username} on {self.nitter_instance}")
-            return [] # Return empty list on timeout 
+            logger.error(f"[Executor] Timeout waiting for tweets for user {username} on {self.nitter_instance}")
+            return [] 
         except WebDriverException as e:
-            logger.error(f"Browser error on {self.nitter_instance}: {e}")
-            # Optionally try to restart the driver here?
+            logger.error(f"[Executor] Browser error on {self.nitter_instance}: {e}")
             return []
         except Exception as e:
-            logger.error(f"Unexpected error scraping {self.nitter_instance}: {e}", exc_info=True)
+            logger.error(f"[Executor] Unexpected error scraping {self.nitter_instance}: {e}", exc_info=True)
             return []
+    # --- End Synchronous Helper Method --- 
             
     async def search_users(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search for users on Nitter and return basic profile info."""
