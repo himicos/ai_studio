@@ -85,4 +85,14 @@ uploads/
 *.pth
 *.tflite
 model_cache/
-.vector_cache/ 
+.vector_cache/
+
+# Nitter source code (if downloaded locally for build)
+nitter-master/
+
+# Generated Vector Store files
+data/vector_store.faiss
+data/vector_store_metadata.json
+
+# Redis dump files
+*.rdb 
