@@ -2,25 +2,29 @@ version: '3.4'
 
 services:
   nitter:
-    # image: epenguincom/nitter:latest # Alternative image 1
-    image: tiredofit/nitter:latest # Trying alternative image 2 (Archived)
+    build:
+      context: . # Build from the current directory
+      dockerfile: Dockerfile.nitter-custom # Use our custom Dockerfile
     container_name: nitter
     hostname: nitter
     restart: unless-stopped
     environment:
-      - REDIS_HOST=nitter-redis # Env var expected by tiredofit/nitter
-      - REDIS_PORT=6379
-      - ENABLE_HTTPS=FALSE # Match tiredofit env var names
-      - SETUP_MODE=AUTO # Use env vars for config
-      # Add other relevant tiredofit env vars if needed, see its README
-      # e.g., - SITE_HOSTNAME=localhost (or your desired public hostname)
+      # Pass proxy settings from host to container if set
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - NO_PROXY=${NO_PROXY}
+      # Add any other Nitter-specific env vars needed for runtime config
+      # Base URL might be needed if Nitter uses it internally
+      - NITTER_BASE_URL=${NITTER_BASE_URL:-http://localhost:8080}
+      # Explicitly set Redis host via environment variable
+      - NITTER_REDIS_HOST=nitter-redis 
+      - NITTER_REDIS_PORT=6379
     ports:
       - "127.0.0.1:8080:8080"
-    # volumes: # Remove volumes section for now to rely on env vars
-    #   # tiredofit image might use /config or another path, adjust if needed
-    #   # Keeping these commented out initially to rely purely on env vars
-    #   # - ./nitter.conf:/config/nitter.conf 
-    #   # - ./sessions.jsonl:/config/sessions.jsonl 
+    volumes: 
+      # Mount local configs to the WORKDIR inside the container
+      - ./nitter.conf:/app/nitter/nitter.conf:ro # Mount read-only
+      - ./sessions.jsonl:/app/nitter/sessions.jsonl:rw # Mount read-write if Nitter modifies it
     depends_on:
       - redis
     networks:
@@ -33,6 +37,9 @@ services:
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    # Add redis.conf volume if custom redis config is needed
+    # - ./redis.conf:/usr/local/etc/redis/redis.conf:ro 
+    # command: redis-server /usr/local/etc/redis/redis.conf # Uncomment if using custom config
     networks:
       - nitter-network
 

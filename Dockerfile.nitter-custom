@@ -1,0 +1,78 @@
+# Use Alpine as a base image for smaller size
+FROM alpine:3.19
+
+# Set arguments for versions and user
+ARG NIM_VERSION=2.0.2
+ARG USER=nitter
+ARG UID=1000
+ARG GID=1000
+ARG APP_DIR=/app/nitter
+
+# Install dependencies
+# build-base includes gcc, make, etc.
+# pcre-dev and libsass-dev are needed for Nitter compilation
+# git for cloning, curl/jq for potential utilities/healthchecks
+RUN apk update && \
+    apk add --no-cache \
+        build-base \
+        nim \
+        nimble \
+        pcre-dev \
+        libsass-dev \
+        git \
+        redis \
+        curl \
+        jq \
+        su-exec && \
+    rm -rf /var/cache/apk/*
+
+# --- DEBUG: Find where nimble is installed ---
+# RUN find / -name nimble # Keep commented out for now
+# ---------------------------------------------
+
+# Create app directory and non-root user/group
+RUN addgroup -g ${GID} ${USER} && \
+    adduser -u ${UID} -G ${USER} -h /home/${USER} -s /bin/sh -D ${USER} && \
+    mkdir -p ${APP_DIR} && \
+    chown -R ${USER}:${USER} /home/${USER} ${APP_DIR}
+
+# Set working directory
+WORKDIR ${APP_DIR}
+
+# Copy Nitter source code from the host context
+# Adjust path assuming source is in a nested directory
+COPY --chown=${USER}:${USER} ./nitter-master/nitter-master/ .
+
+# --- DEBUG: List directory contents after copy ---
+RUN ls -la /app/nitter
+# -------------------------------------------------
+
+# Compile Nitter as root (easier PATH handling)
+# Remove -d:release, keep -d:use_sse2 for now
+# Add --accept to automatically confirm downloads
+RUN nimble build --accept -d:use_sse2 && \
+    nimble scss && \
+    nimble md
+
+# Ensure correct ownership of compiled files and source
+RUN chown -R ${USER}:${USER} ${APP_DIR}
+
+# Copy default config and session files into the expected location
+# These will be overwritten by volumes if mounted
+COPY --chown=${USER}:${USER} ./nitter.conf ${APP_DIR}/nitter.conf
+COPY --chown=${USER}:${USER} ./sessions.jsonl ${APP_DIR}/sessions.jsonl
+
+# Expose Nitter port
+EXPOSE 8080
+
+# Set user
+USER ${USER}
+
+# Default entrypoint/command to run Nitter
+# It should pick up nitter.conf from the current directory (WORKDIR)
+ENTRYPOINT ["./nitter"] 
+CMD []
+
+# Basic healthcheck - checks if the server responds on localhost
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:8080/ || exit 1 
