@@ -572,13 +572,47 @@ def test_semantic_search_api():
     
     return success
 
+def test_local_nitter_connection():
+    """Test connection to the configured local Nitter instance."""
+    logger.info("=== Testing Local Nitter Connection ===")
+    nitter_base_url = os.environ.get('NITTER_BASE_URL', 'http://localhost:8080').rstrip('/')
+    test_profile_url = f"{nitter_base_url}/elonmusk" # A known profile to test
+    logger.info(f"Attempting to connect to: {test_profile_url}")
+
+    try:
+        response = requests.get(test_profile_url, timeout=15)
+        logger.info(f"Received status code: {response.status_code}")
+        
+        # Check for a successful status code (2xx)
+        # Treat 404 as success for connection check, as Nitter is running but can't fetch w/o sessions
+        if 200 <= response.status_code < 300 or response.status_code == 404:
+            logger.info("[PASS] Successfully connected to local Nitter instance.")
+            if response.status_code == 404:
+                logger.warning("[NOTE] Nitter returned 404 Not Found (expected without session tokens).")
+            elif "Tweets" not in response.text and "posts" not in response.text:
+                 logger.warning("[NOTE] Nitter page loaded but might be empty or error page (expected without sessions).")
+            return True
+        else:
+            logger.error(f"[FAIL] Failed to connect to local Nitter (unexpected status). Status code: {response.status_code}")
+            return False
+            
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"[FAIL] Connection error reaching local Nitter instance: {e}")
+        return False
+    except requests.exceptions.Timeout:
+        logger.error("[FAIL] Timeout connecting to local Nitter instance.")
+        return False
+    except Exception as e:
+        logger.error(f"[FAIL] Unexpected error testing Nitter connection: {e}")
+        return False
+
 def main():
     """Main function to run all tests"""
     parser = argparse.ArgumentParser(description="Test AI Studio functionality")
     parser.add_argument("--fix", action="store_true", help="Attempt to fix common issues")
     parser.add_argument("--generate-data", action="store_true", help="Generate test data if needed")
     parser.add_argument("--api-url", default="http://localhost:8000", help="API base URL")
-    parser.add_argument("--test", choices=["all", "sil", "vector", "graph", "semantic"], default="all", 
+    parser.add_argument("--test", choices=["all", "sil", "vector", "graph", "semantic", "nitter", "twitter"], default="all", 
                         help="Specify which test to run")
     
     args = parser.parse_args()
@@ -615,7 +649,16 @@ def main():
         
     if args.test in ["all", "graph"]:
         test_knowledge_graph()
-    
+
+    if args.test in ["all", "nitter", "twitter"]:
+        test_local_nitter_connection()
+        # Add twitter agent specific tests here later
+        # if test_local_nitter_connection():
+        #    logger.info("Local Nitter connection successful, proceeding with Twitter agent tests...")
+        #    # Add calls to test twitter agent functionality (e.g., scraping via BrowserManager)
+        # else:
+        #    logger.error("Skipping Twitter agent tests due to Nitter connection failure.")
+
     logger.info("=== Test Completed ===")
     logger.info("""
 Test Summary:

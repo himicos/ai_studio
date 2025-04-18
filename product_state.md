@@ -22,7 +22,7 @@ AI Studio is a personal knowledge management and augmentation system. It integra
 | Feature             | Description                                                                                                | Status                                                                 | Key Components                                                                                                | Notes                                                                 |
 | :------------------ | :--------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------- |
 | **Reddit Agent**    | Tracks specified subreddits, fetches new posts, stores them, and provides summarization capabilities.        | ✅ Working                                                               | `data/reddit_tracker.py`, `ai_studio_package/web/routes/reddit_agent.py`, `db_enhanced.py::insert_reddit_posts` | Summarization runs on CPU. API endpoints for tracking, feed, summarization. |
-| **Twitter Agent**   | Tracks specified Twitter users/handles, fetches tweets, stores them, and provides summarization capabilities. | ✅ Working                                                               | `data/twitter_agent.py`, `ai_studio_package/web/routes/twitter_agent.py`, `db_enhanced.py::insert_tweets`       | Summarization runs on CPU. API endpoints for tracking, feed, summarization. |
+| **Twitter Agent**   | Tracks specified Twitter users/handles, fetches tweets, stores them, and provides summarization capabilities. | ✅ Working (via Nitter)                                                | `data/twitter_agent.py`, `ai_studio_package/web/routes/twitter_agent.py`, `db_enhanced.py::insert_tweets`       | Uses Nitter proxy (self-hosted planned). Summarization runs on CPU. Configurable Nitter URL planned. |
 | **Memory Nodes**    | Central data structure representing pieces of information (posts, summaries, concepts).                      | ✅ Working                                                               | `ai_studio_package/infra/db_enhanced.py` (`memory_nodes` table), `vector_adapter.py`                         | Stored in SQLite. Embeddings are generated for content to enable search. |
 | **Memory Edges**    | Represents relationships between Memory Nodes.                                                             | ✅ Working (Storage)                                                   | `ai_studio_package/infra/db_enhanced.py` (`memory_edges` table)                                               | Edge creation logic exists (e.g., linking prompts to outputs).        |
 | **Semantic Search** | Allows searching for Memory Nodes based on semantic similarity to a query text.                              | ✅ Working                                                               | `ai_studio_package/web/routes/memory_routes.py`, `db_enhanced.py::search_similar_nodes`, `vector_adapter.py` | Uses FAISS for efficient similarity search.                           |
@@ -231,11 +231,12 @@ The knowledge graph visualization has been enhanced with Live Semantic Query Hig
 
 ## 10. Next Steps / Focus Areas
 
-1.  **Complete Knowledge Graph Improvements:** Fix remaining issues with graph visualization and address linter errors in the `MemoryPanel` component.
-2.  **Memory Weight Frontend Integration:** Connect the frontend to the existing `/nodes/weights` endpoint to enable visualization of node importance.
-3.  **Self-Improvement Loop Enhancement:** Gather execution data and refine the Critic and Refactor agents based on initial feedback.
-4.  **Actionable Nodes Implementation:** Begin developing context menu functionality to transform the graph into an active workspace.
-5.  **Performance Monitoring:** Keep an eye on performance, especially during data ingestion and semantic search, given the CPU-bound nature. Consider re-enabling GPU if necessary.
+1.  **Nitter Self-Hosting Integration:** Set up a local Nitter instance and modify `browser_manager.py` to use a configurable URL (environment variable or config file), improving reliability and allowing future API integration.
+2.  **Complete Knowledge Graph Improvements:** Fix remaining issues with graph visualization and address linter errors in the `MemoryPanel` component.
+3.  **Memory Weight Frontend Integration:** Connect the frontend to the existing `/nodes/weights` endpoint to enable visualization of node importance.
+4.  **Self-Improvement Loop Enhancement:** Gather execution data and refine the Critic and Refactor agents based on initial feedback.
+5.  **Actionable Nodes Implementation:** Begin developing context menu functionality to transform the graph into an active workspace.
+6.  **Performance Monitoring:** Keep an eye on performance, especially during data ingestion and semantic search, given the CPU-bound nature. Consider re-enabling GPU if necessary.
 
 ## Data Ingestion & Embedding Pipeline (Recent Updates)
 

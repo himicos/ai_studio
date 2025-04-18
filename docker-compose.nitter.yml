@@ -1,0 +1,43 @@
+version: '3.4'
+
+services:
+  nitter:
+    # image: epenguincom/nitter:latest # Alternative image 1
+    image: tiredofit/nitter:latest # Trying alternative image 2 (Archived)
+    container_name: nitter
+    hostname: nitter
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=nitter-redis # Env var expected by tiredofit/nitter
+      - REDIS_PORT=6379
+      - ENABLE_HTTPS=FALSE # Match tiredofit env var names
+      - SETUP_MODE=AUTO # Use env vars for config
+      # Add other relevant tiredofit env vars if needed, see its README
+      # e.g., - SITE_HOSTNAME=localhost (or your desired public hostname)
+    ports:
+      - "127.0.0.1:8080:8080"
+    # volumes: # Remove volumes section for now to rely on env vars
+    #   # tiredofit image might use /config or another path, adjust if needed
+    #   # Keeping these commented out initially to rely purely on env vars
+    #   # - ./nitter.conf:/config/nitter.conf 
+    #   # - ./sessions.jsonl:/config/sessions.jsonl 
+    depends_on:
+      - redis
+    networks:
+      - nitter-network
+
+  redis:
+    image: redis:alpine
+    container_name: nitter-redis
+    hostname: nitter-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - nitter-network
+
+volumes:
+  redis-data:
+
+networks:
+  nitter-network: 

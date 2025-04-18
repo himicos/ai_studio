@@ -22,14 +22,22 @@ import functools # Add functools import
 logger = logging.getLogger(__name__)
 
 class BrowserManager:
-    def __init__(self, headless: bool = True, proxy: Optional[str] = None):
+    def __init__(self, proxy_manager=None, headless=True, use_nitter_instances=True):
+        self.proxy_manager = proxy_manager
         self.headless = headless
-        self.proxy = proxy
+        self.use_nitter_instances = use_nitter_instances
+        self.lock = asyncio.Lock() # Ensure thread safety for browser operations
+
+        # --- Nitter Configuration ---
+        # Use environment variable for Nitter URL, fallback to localhost default
+        self.nitter_instance = os.environ.get('NITTER_BASE_URL', 'http://localhost:8080').rstrip('/')
+        logger.info(f"Using Nitter instance URL: {self.nitter_instance}")
+        # ---------------------------
+
+        # Load keywords from DB
+        self.keywords = self._load_keywords()
         self.driver: Optional[webdriver.Chrome] = None
         self.tabs: Dict[str, webdriver.Chrome] = {}
-        # Use only nitter.net
-        self.nitter_instance = "https://nitter.net"
-        logger.info(f"Using Nitter instance: {self.nitter_instance}")
         
     def setup_driver(self) -> webdriver.Chrome:
         """Initialize Chrome driver with enhanced anti-detection options."""
@@ -60,9 +68,9 @@ class BrowserManager:
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
         # Add proxy if configured (existing logic)
-        if self.proxy:
-            logger.info(f"Configuring proxy: {self.proxy}")
-            chrome_options.add_argument(f'--proxy-server={self.proxy}')
+        if self.proxy_manager:
+            logger.info(f"Configuring proxy: {self.proxy_manager}")
+            chrome_options.add_argument(f'--proxy-server={self.proxy_manager}')
         
         try:
             # Initialize the Chrome WebDriver with service
@@ -243,7 +251,7 @@ class BrowserManager:
         if not self.driver:
             self.driver = self.setup_driver()
             
-        search_url = f"https://nitter.net/search?f=users&q={query}" # Use f=users for user search
+        search_url = f"{self.nitter_instance}/search?f=users&q={query}" # Use f=users for user search
         logger.info(f"Navigating to user search: {search_url}")
         
         try:
@@ -317,7 +325,7 @@ class BrowserManager:
             logger.error("WebDriver not initialized. Cannot scrape profile.")
             return []
 
-        profile_url = f"{base_url}/{handle}"
+        profile_url = f"{self.nitter_instance}/{handle}"
         logger.info(f"[Scrape Profile] Attempting to scrape profile: {profile_url}")
         
         try:

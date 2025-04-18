@@ -75,16 +75,25 @@ We've implemented a Self-Improvement Loop (SIL) framework to enable the system t
 - **Embedding Model:** Using `all-MiniLM-L6-v2` which generates 384-dimension vectors
 - **Summarization:** Using BART-based model for generating summaries of content
 - **Execution Logs:** New table tracks API performance, errors, and usage patterns
+- **Twitter Data Source:** Currently relies on Nitter (`nitter.net`) as a proxy for Twitter data.
 
-## 7. Next Steps
+## 7. Twitter Agent Fix & Nitter Self-Hosting
 
-1. **Backend Improvement:** Continue monitoring the embedding generation process to ensure stability
-2. **Knowledge Graph:** Complete frontend improvements to fix remaining visualization issues
-3. **Self-Improvement Loop:** Gather execution data and refine the Critic and Refactor agents
-4. **Memory Weight:** Implement frontend integration for the existing backend `/nodes/weights` endpoint
-5. **Performance Optimization:** Consider GPU acceleration for model inference
+- **Issue:** The Twitter agent was failing due to DNS resolution errors (`ERR_NAME_NOT_RESOLVED`) when trying to access the public `nitter.net` instance. Public Nitter instances can be unreliable.
+- **Resolution:** Identified the hardcoded `nitter.net` URL in `ai_studio_package/data/browser_manager.py`.
+- **Decision:** To improve reliability and control, we will set up a self-hosted Nitter instance.
+- **Next Step:** Configure the `browser_manager.py` to use the local Nitter instance URL, making it configurable for future flexibility (e.g., switching to the official Twitter API).
 
-## 8. Scripts Created During Fix
+## 8. Next Steps
+
+1. **Nitter Integration:** Set up the self-hosted Nitter instance and update `browser_manager.py` to use its configurable URL.
+2. **Backend Improvement:** Continue monitoring the embedding generation process to ensure stability
+3. **Knowledge Graph:** Complete frontend improvements to fix remaining visualization issues
+4. **Self-Improvement Loop:** Gather execution data and refine the Critic and Refactor agents
+5. **Memory Weight:** Implement frontend integration for the existing backend `/nodes/weights` endpoint
+6. **Performance Optimization:** Consider GPU acceleration for model inference
+
+## 9. Scripts Created During Fix
 
 Several diagnostic and utility scripts were created to fix the database issues:
 

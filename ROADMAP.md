@@ -140,6 +140,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 ## Implementation Strategy
 
 ### Current Focus
+- **Nitter Self-Hosting & Configuration:** Set up local Nitter, update code to use configurable URL.
 - **Memory Weight Frontend Integration**: Finish connecting frontend to the backend implementation.
 - **Actionable Nodes**: Begin implementation of context menu functionality.
 
@@ -170,6 +171,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 4. ⚠️ Standardize metadata schema for all memory objects (Ongoing)
 5. ⚠️ Implement efficient graph rendering optimizations for larger datasets (Ongoing)
 6. ⚠️ Develop consistent interaction patterns for graph elements (Key for Actionable Nodes)
+7. ⚠️ **Configure Twitter Data Source:** Implement configurable URL for self-hosted Nitter, allowing flexibility for future API integration.
 
 ## Success Metrics
 
@@ -182,6 +184,13 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 - **Self-Improvement**: Rate of successful auto-refactors and system optimizations
 
 ## System Efficiency Enhancements
+
+### 0. Nitter Self-Hosting Configuration [✅ Completed]
+- **Priority**: Critical (for Twitter Agent reliability)
+- **Effort**: Low (0.5x) + Troubleshooting (1.5x)
+- **Impact**: Ensures reliable Twitter data ingestion, prerequisite for Twitter-related features.
+- **Description**: Set up a local Nitter instance and modify `ai_studio_package/data/browser_manager.py` to use a configurable base URL (e.g., via environment variable) instead of the hardcoded `nitter.net`. This provides stability and allows for future integration of the official Twitter API if desired.
+- **Status**: Completed. Nitter service running via Docker Compose, app connects successfully. (Requires session tokens for live data).
 
 ### 1. Vector Database Migration (SQLite → FAISS) [✅ Completed]
 - **Priority**: High
