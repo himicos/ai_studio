@@ -55,10 +55,16 @@ export function TwitterAgentPanel({ id }: TwitterAgentPanelProps) {
   const [isTracking, setIsTracking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
-  const [sortOption, setSortOption] = useState<SortOption>('date');
+  const [sortOption, setSortOption] = useState<SortOption>('date_posted');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [isLoadingTrackingStatus, setIsLoadingTrackingStatus] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
+  const [isSummarizingTweet, setIsSummarizingTweet] = useState<Record<string, boolean>>({});
+
+  // Add pagination state
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const TWEETS_PER_PAGE = 20;
 
   const fetchTrackedUsers = useCallback(async () => {
     setIsLoadingUsers(true);
@@ -82,27 +88,54 @@ export function TwitterAgentPanel({ id }: TwitterAgentPanelProps) {
     }
   }, []);
 
-  const fetchFeed = useCallback(async () => {
+  const fetchFeed = useCallback(async (append: boolean = false) => {
+    if (!append) {
+      setOffset(0);
+    }
+    if (!hasMore && append) {
+      return;
+    }
+    
     setIsLoadingFeed(true);
     setError(null);
+    
     try {
       const params = {
-         keyword: keyword || undefined,
-         sort_by: sortOption,
-         sort_order: sortOrder
-       };
+        keyword: keyword || undefined,
+        sort_by: sortOption,
+        sort_order: sortOrder,
+        offset: append ? offset : 0,
+        limit: TWEETS_PER_PAGE
+      };
+      
       const response = await api.get('/api/twitter-agent/feed', { params });
-      setFeedTweets(Array.isArray(response.data) ? response.data : []);
+      const newTweets = Array.isArray(response.data) ? response.data : [];
+      
+      setFeedTweets(prev => append ? [...prev, ...newTweets] : newTweets);
+      setHasMore(newTweets.length === TWEETS_PER_PAGE);
+      if (append) {
+        setOffset(offset + newTweets.length);
+      }
     } catch (err) {
       setError('Failed to fetch feed');
       console.error('Error fetching feed:', err);
-      setFeedTweets([]);
+      if (!append) {
+        setFeedTweets([]);
+      }
     } finally {
       setIsLoadingFeed(false);
     }
+  }, [keyword, sortOption, sortOrder, offset, hasMore]);
+
+  // Reset feed when filters change
+  useEffect(() => {
+    setFeedTweets([]);
+    setOffset(0);
+    setHasMore(true);
+    fetchFeed(false);
   }, [keyword, sortOption, sortOrder]);
 
-  const debouncedFetchFeed = useCallback(debounce(fetchFeed, 500), [fetchFeed]);
+  const debouncedFetchFeed = useCallback(debounce((append: boolean) => fetchFeed(append), 500), [fetchFeed]);
 
   const handleRemoveUser = useCallback(async (userId: string) => {
     try {
@@ -179,15 +212,25 @@ export function TwitterAgentPanel({ id }: TwitterAgentPanelProps) {
     }
   };
 
+  const handleSummarizeTweet = async (tweetId: string) => {
+    setIsSummarizingTweet(prev => ({ ...prev, [tweetId]: true }));
+    try {
+      // Add your tweet summarization logic here
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Placeholder
+    } finally {
+      setIsSummarizingTweet(prev => ({ ...prev, [tweetId]: false }));
+    }
+  };
+
   useEffect(() => {
     fetchTrackedUsers();
     fetchTrackingStatus();
-    debouncedFetchFeed();
-    return () => debouncedFetchFeed.cancel();
+    debouncedFetchFeed(false);
+    return () => debouncedFetchFeed(false);
   }, [fetchTrackedUsers, fetchTrackingStatus, debouncedFetchFeed]);
 
   useEffect(() => {
-    debouncedFetchFeed();
+    debouncedFetchFeed(false);
   }, [keyword, sortOption, sortOrder, debouncedFetchFeed]);
 
   // Log the callback function just before rendering
@@ -277,13 +320,41 @@ export function TwitterAgentPanel({ id }: TwitterAgentPanelProps) {
                                         onSortOrderChange={setSortOrder}
                                     />
                                 </div>
-                                <div className="flex-1 overflow-y-auto p-4">
-                                    {isLoadingFeed ? (
+                                <div 
+                                    className="flex-1 overflow-y-auto p-4"
+                                    onScroll={(e) => {
+                                        const target = e.target as HTMLDivElement;
+                                        if (
+                                            !isLoadingFeed &&
+                                            hasMore &&
+                                            target.scrollHeight - target.scrollTop <= target.clientHeight + 200
+                                        ) {
+                                            debouncedFetchFeed(true);
+                                        }
+                                    }}
+                                >
+                                    {isLoadingFeed && !feedTweets.length ? (
                                         <div className="flex justify-center items-center h-full">
                                             <Spinner className="h-6 w-6 animate-spin" />
                                         </div>
                                     ) : (
-                                        <FeedList tweets={feedTweets} /> 
+                                        <>
+                                            <FeedList 
+                                                tweets={feedTweets}
+                                                onSummarizeTweet={handleSummarizeTweet}
+                                                isSummarizingTweet={isSummarizingTweet}
+                                            />
+                                            {isLoadingFeed && (
+                                                <div className="flex justify-center items-center py-4">
+                                                    <Spinner className="h-6 w-6 animate-spin" />
+                                                </div>
+                                            )}
+                                            {!hasMore && feedTweets.length > 0 && (
+                                                <div className="text-center text-muted-foreground py-4">
+                                                    No more tweets to load
+                                                </div>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                             </div>

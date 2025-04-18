@@ -489,14 +489,17 @@ async def startup_event():
 
     # Initialize Trackers/Agents (AFTER pipelines)
     logger.info("Initializing agents...")
-    # Initialize Twitter Tracker
-    try:
-        browser_manager = BrowserManager(headless=True)
-        app.state.twitter_scanner = TwitterTracker(browser_manager)
-        logger.info("Twitter Scanner initialized with BrowserManager.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Twitter Scanner: {e}", exc_info=True)
-        app.state.twitter_scanner = None # Ensure it exists but is None
+    # Initialize browser manager and twitter scanner
+    browser_manager = BrowserManager()
+    twitter_scanner = TwitterTracker()
+    twitter_scanner.set_browser_manager(browser_manager)
+    app.state.twitter_scanner = twitter_scanner
+    
+    # Start the Twitter scanner background task with default scan interval (600 seconds)
+    app.state.twitter_scanner_task = asyncio.create_task(twitter_scanner.start())
+    
+    # Store browser manager in app state for other components
+    app.state.browser_manager = browser_manager
 
     # Initialize Reddit Agent Tracker
     try:

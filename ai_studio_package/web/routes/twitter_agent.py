@@ -16,6 +16,7 @@ from ai_studio_package.infra.db_enhanced import (
     get_db_connection, get_twitter_feed, create_memory_node, 
     get_tweet_by_id, get_top_twitter_posts
 )
+from ai_studio_package.infra.vector_adapter import search_similar_nodes_faiss
 import sqlite3
 from transformers import pipeline
 import yake
@@ -92,6 +93,20 @@ class TweetSummaryResponse(BaseModel):
     original_content: Optional[str] = None
     summary: str
     memory_node_id: Optional[str] = None
+
+class TweetSearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+    min_similarity: float = 0.7
+    include_content: bool = True
+
+class TweetSearchResponse(BaseModel):
+    id: str
+    content: str
+    author: str
+    url: str
+    similarity: float
+    metadata: Dict[str, Any]
 
 # --- Endpoints ---
 
@@ -898,5 +913,64 @@ async def get_top_tweets(
     finally:
         if conn:
             conn.close()
+
+@router.post("/search/semantic", response_model=List[TweetSearchResponse])
+async def search_tweets_semantic(request: TweetSearchRequest):
+    """
+    Search tweets using semantic similarity.
+    
+    This endpoint uses FAISS vector search to find tweets similar to the query.
+    """
+    try:
+        # Search for similar nodes
+        results = search_similar_nodes_faiss(
+            query_text=request.query,
+            limit=request.limit,
+            min_similarity=request.min_similarity,
+            node_type="tweet"  # Only search for tweet nodes
+        )
+        
+        # Format response
+        response = []
+        for result in results:
+            # Get full tweet data if requested
+            tweet_data = result
+            if request.include_content:
+                tweet_id = result['id'].replace('tweet_', '')  # Remove prefix
+                cursor = get_db_connection().cursor()
+                cursor.execute("""
+                    SELECT t.*, u.handle as author 
+                    FROM tracked_tweets t
+                    JOIN tracked_users u ON t.user_id = u.id
+                    WHERE t.tweet_id = ?
+                """, (tweet_id,))
+                db_tweet = cursor.fetchone()
+                if db_tweet:
+                    tweet_data.update({
+                        'content': db_tweet['content'],
+                        'author': db_tweet['author'],
+                        'url': db_tweet['url'],
+                        'metadata': {
+                            'likes': db_tweet['engagement_likes'],
+                            'retweets': db_tweet['engagement_retweets'],
+                            'replies': db_tweet['engagement_replies'],
+                            'date_posted': db_tweet['date_posted']
+                        }
+                    })
+            
+            response.append(TweetSearchResponse(
+                id=tweet_data['id'],
+                content=tweet_data.get('content', ''),
+                author=tweet_data.get('author', ''),
+                url=tweet_data.get('url', ''),
+                similarity=tweet_data.get('similarity', 0.0),
+                metadata=tweet_data.get('metadata', {})
+            ))
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in semantic tweet search: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # TODO: Define the background agent (twitter_tracker_agent.py)

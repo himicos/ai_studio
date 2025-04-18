@@ -2087,7 +2087,7 @@ def get_twitter_feed(
     limit: int = 50,
     offset: int = 0,
     keyword: Optional[str] = None,
-    sort_by: str = 'created_at', # Changed default to created_at
+    sort_by: str = 'date_posted',  # Changed default to date_posted to match frontend
     sort_order: str = 'desc'
 ) -> List[Dict[str, Any]]:
     """
@@ -2107,13 +2107,13 @@ def get_twitter_feed(
     cursor = conn.cursor()
     
     # Validate sort_by column (prevent SQL injection)
-    valid_sort_columns = ['tweet_id', 'user_id', 'handle', 'content', 'created_at', 
-                          'retweet_count', 'like_count', 'reply_count', 'quote_count',
-                          'view_count', 'bookmark_count', 'url', 'score']
+    valid_sort_columns = ['tweet_id', 'user_id', 'handle', 'content', 'date_posted', 
+                          'engagement_likes', 'engagement_retweets', 'engagement_replies',
+                          'url', 'score', 'sentiment', 'keywords']
     
     if sort_by not in valid_sort_columns:
-        logger.warning(f"Invalid sort_by column: {sort_by}. Defaulting to 'created_at'")
-        sort_by = 'created_at'
+        logger.warning(f"Invalid sort_by column: {sort_by}. Defaulting to 'date_posted'")
+        sort_by = 'date_posted'
     
     # Validate sort_order (prevent SQL injection)
     sort_order = sort_order.upper()
@@ -2122,48 +2122,37 @@ def get_twitter_feed(
         sort_order = 'DESC'
     
     # Construct the query
-    query = "SELECT * FROM tweets"
+    query = """
+        SELECT t.*, u.handle 
+        FROM tracked_tweets t
+        JOIN tracked_users u ON t.user_id = u.id
+        WHERE 1=1
+    """
     params = []
     
     # Add keyword filter if provided
     if keyword:
-        query += " WHERE content LIKE ?"
+        query += " AND t.content LIKE ?"
         params.append(f"%{keyword}%")
     
     # Add sorting
-    query += f" ORDER BY {sort_by} {sort_order}"
+    query += f" ORDER BY t.{sort_by} {sort_order}"
     
     # Add limit and offset
     query += " LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     
-    # Execute query
-    try:
-        cursor.execute(query, params)
-        tweets = cursor.fetchall()
-        
-        # Convert the results to dictionaries
-        tweet_list = []
-        for tweet in tweets:
-            tweet_dict = dict(tweet)
-            
-            # Process JSON fields
-            for field in ['engagement', 'links', 'media', 'in_reply_to', 'keywords', 'metadata']:
-                if field in tweet_dict and tweet_dict[field]:
-                    try:
-                        tweet_dict[field] = json.loads(tweet_dict[field])
-                    except (json.JSONDecodeError, TypeError):
-                        tweet_dict[field] = {} if field in ['engagement', 'metadata'] else []
-                else:
-                    tweet_dict[field] = {} if field in ['engagement', 'metadata'] else []
-            
-            tweet_list.append(tweet_dict)
-        
-        return tweet_list
-        
-    except Exception as e:
-        logger.error(f"Error retrieving Twitter feed: {e}")
-        return []
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    
+    # Convert rows to dictionaries
+    tweets = []
+    for row in cursor.fetchall():
+        columns = [description[0] for description in cursor.description]
+        tweet_dict = dict(zip(columns, row))
+        tweets.append(tweet_dict)
+    
+    return tweets
 
 def get_top_twitter_posts(
     conn: sqlite3.Connection,

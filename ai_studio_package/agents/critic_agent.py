@@ -14,10 +14,9 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
 # Import database and API functions
-from ai_studio_package.infra.db_enhanced import create_memory_node, get_memory_node
-from ai_studio_package.infra.vector_adapter import generate_embedding_for_node_faiss
+from ai_studio_package.infra.db_enhanced import create_memory_node, get_memory_node, get_db_connection
+from ai_studio_package.infra.vector_adapter import generate_embedding_for_node_faiss, create_node_with_embedding
 from ai_studio_package.infra.execution_logs import get_execution_logs, get_execution_stats
-from ai_studio_package.infra.db import get_db_connection
 
 # Set up logging
 logging.basicConfig(
@@ -47,7 +46,7 @@ def analyze_execution_logs(
     min_entries: int = 5
 ) -> Dict[str, Any]:
     """
-    Analyze execution logs for a specific task or all tasks
+    Analyze execution logs to identify patterns and issues
     
     Args:
         task: Optional task name to filter logs
@@ -58,94 +57,90 @@ def analyze_execution_logs(
     Returns:
         Dict with analysis results
     """
-    logger.info(f"Analyzing execution logs for {'task: ' + task if task else 'all tasks'}")
-    
-    # Calculate start date
-    start_date = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
-    
-    # Get execution logs
-    logs = get_execution_logs(
-        task=task,
-        limit=limit,
-        start_date=start_date
-    )
-    
-    # Check if we have enough logs
-    if len(logs) < min_entries:
-        logger.info(f"Not enough logs for analysis. Found {len(logs)}, need at least {min_entries}")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Calculate time threshold
+        time_threshold = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+        
+        # Build query
+        query = """
+        SELECT * FROM execution_logs 
+        WHERE start_time >= ? 
+        """
+        params = [time_threshold]
+        
+        if task:
+            query += " AND task = ?"
+            params.append(task)
+            
+        query += f" ORDER BY start_time DESC LIMIT {limit}"
+        
+        # Execute query
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        if len(rows) < min_entries:
+            return {
+                "status": "insufficient_data",
+                "message": f"Not enough data points ({len(rows)} < {min_entries})"
+            }
+            
+        # Calculate metrics
+        total_count = len(rows)
+        success_count = sum(1 for row in rows if row['status'] == 'success')
+        error_count = total_count - success_count
+        success_rate = success_count / total_count
+        
+        # Calculate latency stats
+        latencies = [row['latency'] for row in rows]
+        avg_latency = sum(latencies) / len(latencies)
+        
+        # Analyze error patterns
+        error_patterns = {}
+        for row in rows:
+            if row['status'] == 'error' and row['error']:
+                error_type = row['error'].split(':')[0]
+                error_patterns[error_type] = error_patterns.get(error_type, 0) + 1
+                
+        # Generate analysis text
+        analysis = f"""Performance Analysis for {task if task else 'all tasks'}:
+
+Success Rate: {success_rate:.2%} ({success_count}/{total_count} successful)
+Average Latency: {avg_latency:.2f} seconds
+
+Error Distribution:
+{json.dumps(error_patterns, indent=2)}
+
+Recommendations:
+"""
+
+        # Add recommendations based on patterns
+        if success_rate < 0.9:
+            analysis += "- High error rate detected. Review error patterns and implement better error handling.\n"
+            
+        if avg_latency > 5.0:
+            analysis += "- High average latency. Consider optimization or caching strategies.\n"
+            
+        for error_type, count in error_patterns.items():
+            if count > total_count * 0.1:  # Error occurs in >10% of cases
+                analysis += f"- Frequent {error_type} errors. Implement specific handling for this case.\n"
+                
         return {
-            "status": "insufficient_data",
-            "message": f"Need at least {min_entries} logs for meaningful analysis",
-            "logs_found": len(logs)
+            "status": "success",
+            "success_rate": success_rate,
+            "avg_latency": avg_latency,
+            "error_patterns": error_patterns,
+            "analysis": analysis
         }
-    
-    # Get statistics
-    stats = get_execution_stats(task=task, start_date=start_date)
-    
-    # Extract key metrics
-    success_rate = (stats["success_count"] / stats["total_count"]) * 100 if stats["total_count"] > 0 else 0
-    avg_latency = stats["avg_latency"]
-    
-    # Identify slow executions (>2x average)
-    slow_executions = [log for log in logs if log.get("latency", 0) > (avg_latency * 2)]
-    
-    # Identify error patterns
-    error_logs = [log for log in logs if log.get("status") == "error"]
-    error_types = {}
-    
-    for log in error_logs:
-        error_msg = log.get("error", "Unknown error")
-        # Extract just the error type, not the whole message
-        error_type = error_msg.split(":", 1)[0] if ":" in error_msg else error_msg
-        error_types[error_type] = error_types.get(error_type, 0) + 1
-    
-    # Sort error types by frequency
-    error_patterns = [
-        {"type": error_type, "count": count}
-        for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True)
-    ]
-    
-    # Prepare sample logs for analysis
-    # Include some successful logs and some error logs for a balanced view
-    sample_success = [log for log in logs if log.get("status") == "success"][:3]
-    sample_errors = error_logs[:3]
-    sample_logs = sample_success + sample_errors
-    
-    # Format samples for analysis
-    formatted_samples = []
-    for i, log in enumerate(sample_logs):
-        formatted_samples.append(
-            f"Log {i+1} [status: {log.get('status', 'unknown')}]:\n"
-            f"  Task: {log.get('task', 'unknown')}\n"
-            f"  Latency: {log.get('latency', 0):.2f}s\n"
-            f"  Error: {log.get('error', 'None')}\n"
-            f"  Metadata: {json.dumps(log.get('metadata', {}), indent=2)}"
-        )
-    
-    # Combine samples for analysis
-    analysis_text = (
-        f"Task Analysis: {task or 'All Tasks'}\n"
-        f"Period: Last {days} days\n"
-        f"Sample Logs:\n" + "\n\n".join(formatted_samples) + "\n\n"
-        f"Statistics:\n"
-        f"  Total Executions: {stats['total_count']}\n"
-        f"  Success Rate: {success_rate:.1f}%\n"
-        f"  Average Latency: {avg_latency:.2f}s\n"
-        f"  Error Patterns: {json.dumps(error_patterns, indent=2)}\n"
-    )
-    
-    # Generate analysis (in a real implementation, this would use an LLM)
-    analysis = generate_critique(analysis_text, task)
-    
-    return {
-        "status": "success",
-        "statistics": stats,
-        "success_rate": success_rate,
-        "avg_latency": avg_latency,
-        "error_patterns": error_patterns,
-        "slow_executions_count": len(slow_executions),
-        "analysis": analysis
-    }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing execution logs: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 def generate_critique(analysis_text: str, task_name: Optional[str] = None) -> str:
     """
@@ -209,31 +204,28 @@ def create_critique_node(analysis_result: Dict[str, Any], task_name: Optional[st
         "id": node_id,
         "type": "critique",
         "content": analysis_result["analysis"],
-        "tags": json.dumps(["critique", "self_improvement", task_label]),
+        "tags": ["critique", "self_improvement", task_label],
         "created_at": created_at,
         "updated_at": created_at,
         "source_type": "critic_agent",
-        "metadata": json.dumps({
+        "metadata": {
             "task_name": task_name,
             "success_rate": analysis_result["success_rate"],
             "avg_latency": analysis_result["avg_latency"],
             "error_patterns": analysis_result["error_patterns"],
             "generated_by": "critic_agent",
             "analysis_timestamp": datetime.now().isoformat()
-        })
+        }
     }
     
     try:
-        # Create the memory node
-        create_memory_node(node_data)
-        logger.info(f"Created critique node with ID: {node_id}")
+        # Create the memory node with async embedding generation
+        node_id = create_node_with_embedding(node_data, async_embedding=True)
+        if node_id:
+            logger.info(f"Created critique node with ID: {node_id}")
+            return node_id
+        return None
         
-        # Generate embedding for the node
-        content = node_data["content"]
-        generate_embedding_for_node_faiss(node_id, content, None)  # None will cause it to generate the embedding
-        logger.info(f"Generated embedding for critique node: {node_id}")
-        
-        return node_id
     except Exception as e:
         logger.error(f"Error creating critique node: {e}", exc_info=True)
         return None
@@ -278,7 +270,7 @@ def run_critic(
             "node_id": node_id
         }
     except Exception as e:
-        logger.error(f"Error running critic agent: {e}", exc_info=True)
+        logger.error(f"Error running critic agent: {e}")
         return {
             "status": "error",
             "message": str(e)

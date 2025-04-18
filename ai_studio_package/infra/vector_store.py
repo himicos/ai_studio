@@ -59,6 +59,12 @@ class VectorStoreManager:
         # Initialize or load existing index
         if create_if_missing:
             self._initialize_or_load()
+        
+        # Eagerly load the embedding model *once* during initialization
+        # This ensures it's loaded before concurrent access
+        logger.info("Eagerly initializing embedding model...")
+        _ = self.embedding_model # Access property to trigger load
+        logger.info("Embedding model initialization complete.")
     
     def _initialize_or_load(self) -> None:
         """Initialize a new index or load an existing one."""

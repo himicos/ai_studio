@@ -5,7 +5,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 import asyncio
 from typing import Optional, Dict, List, Any
@@ -18,26 +18,123 @@ import pytz # Import pytz for timezone handling
 from bs4 import BeautifulSoup
 import re
 import functools # Add functools import
+from urllib.parse import urljoin, quote_plus
+import requests
+
+from ai_studio_package.infra.db_enhanced import get_db_connection
 
 logger = logging.getLogger(__name__)
 
 class BrowserManager:
-    def __init__(self, proxy_manager=None, headless=True, use_nitter_instances=True):
-        self.proxy_manager = proxy_manager
-        self.headless = headless
-        self.use_nitter_instances = use_nitter_instances
-        self.lock = asyncio.Lock() # Ensure thread safety for browser operations
+    def __init__(self):
+        """Initialize the browser manager."""
+        self.driver = None
+        self.nitter_instance = os.getenv('NITTER_BASE_URL', 'http://localhost:8080')
+        
+        # Configure connection pool with higher limits
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=20,  # Increased from default
+            pool_maxsize=30,     # Increased from default
+            max_retries=3,       # Add retries
+            pool_block=False     # Don't block when pool is full
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+        
+        logger.info("Browser manager initialized with enhanced connection pool")
+        
+    def _init_driver(self):
+        """Initialize the browser driver if not already initialized."""
+        if not self.driver:
+            try:
+                options = webdriver.ChromeOptions()
+                
+                # Basic headless setup
+                options.add_argument('--headless=new')
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage')
+                
+                # Additional stability options
+                options.add_argument('--disable-gpu')  # Disable GPU hardware acceleration
+                options.add_argument('--disable-software-rasterizer')
+                options.add_argument('--disable-extensions')
+                options.add_argument('--disable-logging')
+                options.add_argument('--disable-notifications')
+                options.add_argument('--disable-default-apps')
+                options.add_argument('--disable-popup-blocking')
+                options.add_argument('--ignore-certificate-errors')
+                options.add_argument('--log-level=3')  # Only show fatal errors
+                
+                # Memory and performance options
+                options.add_argument('--disable-dev-shm-usage')
+                options.add_argument('--disable-features=TranslateUI')
+                options.add_argument('--disable-web-security')
+                options.add_argument('--disable-site-isolation-trials')
+                options.add_argument('--memory-pressure-off')
+                
+                # Create service with specific args
+                service = Service(
+                    ChromeDriverManager().install(),
+                    service_args=['--verbose', '--log-path=chromedriver.log']
+                )
+                
+                # Initialize driver with options and service
+                self.driver = webdriver.Chrome(service=service, options=options)
+                self.driver.set_page_load_timeout(30)  # Increased timeout
+                
+                # Apply CDP commands for enhanced browser control
+                self.driver.execute_cdp_cmd('Network.enable', {})
+                self.driver.execute_cdp_cmd('Network.setBypassServiceWorker', {'bypass': True})
+                
+                logger.info("Browser initialized successfully with enhanced options")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize browser: {e}", exc_info=True)
+                if self.driver:
+                    try:
+                        self.driver.quit()
+                    except:
+                        pass
+                    self.driver = None
+                return False
+        return True
 
-        # --- Nitter Configuration ---
-        # Use environment variable for Nitter URL, fallback to localhost default
-        self.nitter_instance = os.environ.get('NITTER_BASE_URL', 'http://localhost:8080').rstrip('/')
-        logger.info(f"Using Nitter instance URL: {self.nitter_instance}")
-        # ---------------------------
+    def _apply_cdp_commands(self):
+        """Apply CDP commands to make the browser more stealthy."""
+        try:
+            # Set user agent
+            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+            
+            # Hide webdriver
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            # Additional stealth settings
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": """
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['en-US', 'en']
+                    });
+                    Object.defineProperty(navigator, 'platform', {
+                        get: () => 'Win32'
+                    });
+                """
+            })
+            
+            logger.info("CDP commands applied successfully")
+        except Exception as e:
+            logger.error(f"Error applying CDP commands: {e}")
+            raise
 
-        # Load keywords from DB
-        self.keywords = self._load_keywords()
-        self.driver: Optional[webdriver.Chrome] = None
-        self.tabs: Dict[str, webdriver.Chrome] = {}
+    def _load_keywords(self) -> List[str]:
+        # ... implementation ...
+        return [] # Placeholder
         
     def setup_driver(self) -> webdriver.Chrome:
         """Initialize Chrome driver with enhanced anti-detection options."""
@@ -101,223 +198,280 @@ class BrowserManager:
             logger.error(f"Error setting up browser: {e}", exc_info=True)
             raise
     
+    async def get_driver(self) -> webdriver.Chrome:
+        async with self.lock:
+            if not self.driver or not self._is_driver_alive():
+                logger.info("Driver not initialized or not alive. Setting up new driver.")
+                if self.driver: # Close dead driver if exists
+                    try: 
+                        self.driver.quit()
+                    except: pass # Ignore errors quitting old driver
+                self.driver = await asyncio.to_thread(self.setup_driver)
+            return self.driver
+            
+    def _is_driver_alive(self) -> bool:
+        if not self.driver:
+            return False
+        try:
+            # Check a simple property
+            _ = self.driver.title
+            # Optionally ping window handles
+            return len(self.driver.window_handles) > 0
+        except WebDriverException as e:
+            logger.warning(f"Driver seems dead: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error checking driver status: {e}")
+            return False # Assume dead on unexpected errors
+
     async def get_user_tweets(self, username: str, max_tweets: int = 50) -> List[dict]:
         """Get tweets for a specific user using enhanced browser. Runs blocking Selenium calls in an executor."""
-        
-        # Run the core blocking logic in an executor
-        loop = asyncio.get_running_loop()
+        self._init_driver()  # Ensure driver is initialized
+        if not self.driver:
+            logger.error("Failed to get WebDriver instance.")
+            return []
+
         try:
+            # Run the synchronous scraping logic in a separate thread
+            loop = asyncio.get_running_loop()
             tweets = await loop.run_in_executor(
-                None, # Use default ThreadPoolExecutor
-                functools.partial(self._get_user_tweets_sync, username, max_tweets)
+                None, # Use default executor
+                self._sync_get_user_tweets, # The sync function to run
+                username, 
+                max_tweets
             )
             return tweets
         except Exception as e:
-            logger.error(f"Error executing _get_user_tweets_sync in executor: {e}", exc_info=True)
-            return [] # Return empty list on executor error
-
-    # --- New Synchronous Helper Method --- 
-    def _get_user_tweets_sync(self, username: str, max_tweets: int) -> List[dict]:
-        """Synchronous helper method containing the blocking Selenium logic."""
-        if not self.driver:
-            try:
-                # Note: setup_driver itself might block briefly, acceptable here as it runs in executor
-                self.driver = self.setup_driver() 
-            except Exception as setup_err:
-                 logger.error(f"Failed to setup driver in executor, cannot get tweets: {setup_err}")
-                 return [] 
+            logger.error(f"Error in executor running _sync_get_user_tweets for {username}: {e}", exc_info=True)
+            return []
             
-        # Use the hardcoded instance
-        url = f"{self.nitter_instance}/{username}"
-        logger.info(f"[Executor] Navigating to Nitter URL: {url}")
-        
+    def _convert_nitter_to_twitter_url(self, nitter_url: str) -> str:
+        """Convert a Nitter URL to a Twitter/X.com URL."""
         try:
-            self.driver.get(url)
-            
-            # --- Temporarily comment out the webdriver fix ---
-            # logger.info("[Executor] Applying navigator.webdriver fix...")
-            # self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            # time.sleep(0.5) 
-            # --- End temporary comment out ---
+            # Extract username and tweet ID from Nitter URL
+            # Example: http://localhost:8080/username/status/123456 -> https://x.com/username/status/123456
+            parts = nitter_url.split('/')
+            username_idx = parts.index(parts[-3])  # Get username part
+            username = parts[username_idx]
+            tweet_id = parts[-1].split('#')[0]  # Remove any anchor
+            return f"https://x.com/{username}/status/{tweet_id}"
+        except Exception as e:
+            logger.error(f"Error converting Nitter URL {nitter_url}: {e}")
+            return nitter_url
 
-            tweet_item_selector = "div.timeline-item" 
-            logger.info(f"[Executor] Waiting for the first tweet item ({tweet_item_selector}) ...")
-            try:
-                # --- Increase Timeout --- 
-                WebDriverWait(self.driver, 20).until( # Increased timeout to 20 seconds
-                    EC.presence_of_element_located((By.CSS_SELECTOR, tweet_item_selector))
-                )
-                # --- End Increase Timeout ---
-                logger.info("[Executor] First tweet item found. Finding all tweet bodies...")
-            except TimeoutException:
-                logger.error(f"[Executor] Timeout waiting for tweets for user {username} on {self.nitter_instance}")
-                # Optional: Log page source on timeout for debugging selectors
-                # try:
-                #    logger.debug(f"[Timeout Debug] Page source for {username}:\n{self.driver.page_source[:2000]}")
-                # except:
-                #    pass 
-                return []  
+    def _sync_get_user_tweets(self, username: str, max_tweets: int = 50) -> List[dict]:
+        """Synchronous helper to get tweets with improved error handling."""
+        if not self._init_driver():
+            logger.error("[Executor] Failed to initialize driver")
+            return []
             
-            tweets = []
-            tweet_elements = self.driver.find_elements(By.CSS_SELECTOR, "div.tweet-body") 
-            logger.info(f"[Executor] Found {len(tweet_elements)} elements with class 'tweet-body'.")
+        tweets = []
+        processed_tweet_ids = set()
+        user_url = f"{self.nitter_instance}/{username}"
+        logger.info(f"[Executor] Navigating to: {user_url}")
+
+        try:
+            self.driver.get(user_url)
+            wait = WebDriverWait(self.driver, 30)  # Increased timeout
             
-            for body in tweet_elements[:max_tweets]:
-                tweet_id = None 
-                tweet_url = None
-                timestamp_iso = None
-                tweet_stats = {'replies': 0, 'retweets': 0, 'likes': 0, 'quotes': 0 }
-                logger.debug(f"[Executor Scrape Debug] Processing tweet body...") 
+            # Wait for timeline container
+            timeline = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".timeline")))
+            logger.info(f"[Executor] Timeline container found for {username}")
+
+            # Process tweets with better error handling
+            tweet_elements = self.driver.find_elements(By.CSS_SELECTOR, ".timeline-item")
+            for element in tweet_elements[:max_tweets]:
                 try:
-                    parent_item = body.find_element(By.XPATH, "..") 
-                    link_element = parent_item.find_element(By.CSS_SELECTOR, "a.tweet-link")
-                    href = link_element.get_attribute("href")
-                    if href:
-                        tweet_id = href.split("/")[-1].split("#")[0]
-                        tweet_url = f"{self.nitter_instance}{href}" 
+                    # Check for pinned tweet using JavaScript
+                    is_pinned = self.driver.execute_script(
+                        "return arguments[0].querySelector('.pinned') !== null",
+                        element
+                    )
+                    if is_pinned:
+                        continue
+                        
+                    # Get tweet link and ID
+                    permalink = element.find_element(By.CSS_SELECTOR, ".tweet-link")
+                    nitter_url = permalink.get_attribute("href")
+                    if not nitter_url:
+                        continue
+                        
+                    # Convert to absolute URL if relative
+                    if not nitter_url.startswith('http'):
+                        nitter_url = urljoin(self.nitter_instance, nitter_url)
+                        
+                    # Extract tweet ID and convert to x.com URL
+                    tweet_id = nitter_url.split('/')[-1].split('#')[0]
+                    if not tweet_id or tweet_id in processed_tweet_ids:
+                        continue
 
-                    content_element = body.find_element(By.CSS_SELECTOR, "div.tweet-content")
-                    tweet_content = self.driver.execute_script("return arguments[0].textContent;", content_element)
-                    tweet_content = tweet_content.strip() if tweet_content else ""
-                    logger.debug(f"[Executor] Parsed content for tweet {tweet_id}: '{tweet_content[:100]}...'" )
-
-                    timestamp_iso = None
+                    # Get the actual author handle from the tweet
                     try:
-                        date_element = body.find_element(By.CSS_SELECTOR, "span.tweet-date a") 
-                        date_title = date_element.get_attribute("title")
-                        if date_title:
-                            date_str_cleaned = date_title.replace(" UTC", "")
-                            dt_obj = dt.strptime(date_str_cleaned, "%b %d, %Y · %I:%M %p")
-                            dt_obj_utc = pytz.utc.localize(dt_obj)
-                            timestamp_iso = dt_obj_utc.isoformat()
-                    except ValueError as date_fmt_err:
-                        logger.warning(f"[Executor] Could not parse date fmt for tweet {tweet_id}: {date_fmt_err}. Raw: '{date_title}'")
-                    except Exception as date_err:
-                         logger.warning(f"[Executor] General error parsing date for tweet {tweet_id}: {date_err}")
-                         timestamp_iso = None
-
-                    try:
-                        stats_container = body.find_element(By.CSS_SELECTOR, "div.tweet-stats")
-                        stat_spans = stats_container.find_elements(By.CSS_SELECTOR, "span.tweet-stat")
-                        for span in stat_spans:
-                            icon_div = span.find_element(By.CSS_SELECTOR, "div.icon-container span[class^='icon-']")
-                            icon_class = icon_div.get_attribute("class")
-                            stat_text = span.text.strip()
-                            count = 0
-                            if stat_text:
-                                try:
-                                    count = int(stat_text.replace(",", ""))
-                                except ValueError:
-                                    count = 0
-                            if "icon-comment" in icon_class: tweet_stats['replies'] = count
-                            elif "icon-retweet" in icon_class: tweet_stats['retweets'] = count
-                            elif "icon-heart" in icon_class: tweet_stats['likes'] = count
-                            elif "icon-quote" in icon_class: tweet_stats['quotes'] = count
-                        logger.debug(f"[Executor Scrape Debug] Tweet {tweet_id}: Parsed Stats: {tweet_stats}")
-                    except Exception as stats_err:
-                        logger.warning(f"[Executor] Could not parse stats for tweet {tweet_id}: {stats_err}")
-                    
+                        author_element = element.find_element(By.CSS_SELECTOR, ".username")
+                        author = author_element.text.strip().lstrip('@')
+                    except NoSuchElementException:
+                        author = username  # Fallback to the username we're scraping
+                        
                     tweet_data = {
                         'id': tweet_id,
-                        'content': tweet_content,
-                        'timestamp_iso': timestamp_iso,
-                        'stats': tweet_stats,
-                        'url': tweet_url
+                        'url': self._convert_nitter_to_twitter_url(nitter_url),
+                        'author': author,  # Use the actual author from the tweet
+                        'username': username  # Keep original username for reference
                     }
-                    if tweet_id: 
-                         tweets.append(tweet_data)
-                    else:
-                         logger.warning("[Executor] Skipping tweet due to missing ID.")
-                         
+
+                    # Get tweet content
+                    try:
+                        content_element = element.find_element(By.CSS_SELECTOR, ".tweet-content")
+                        tweet_data['content'] = content_element.text.strip()
+                    except NoSuchElementException:
+                        continue  # Skip tweets without content
+
+                    # Get timestamp
+                    try:
+                        ts_element = element.find_element(By.CSS_SELECTOR, ".tweet-date > a")
+                        tweet_data['timestamp_str'] = ts_element.get_attribute('title')
+                    except NoSuchElementException:
+                        tweet_data['timestamp_str'] = None
+
+                    # Get tweet stats
+                    stats_map = {'comment': 0, 'retweet': 0, 'quote': 0, 'like': 0}
+                    try:
+                        stats_container = element.find_element(By.CSS_SELECTOR, ".tweet-stats")
+                        stat_elements = stats_container.find_elements(By.CSS_SELECTOR, ".tweet-stat")
+                        for stat_elem in stat_elements:
+                            icon_element = stat_elem.find_element(By.CSS_SELECTOR, ".icon-container span[class*='icon-']")
+                            icon_class = icon_element.get_attribute('class')
+                            count_text = stat_elem.text.strip().replace(',', '')
+                            count = int(count_text) if count_text.isdigit() else 0
+                            
+                            if 'icon-comment' in icon_class: stats_map['comment'] = count
+                            elif 'icon-retweet' in icon_class: stats_map['retweet'] = count
+                            elif 'icon-quote' in icon_class: stats_map['quote'] = count
+                            elif any(x in icon_class for x in ['icon-like', 'icon-heart']): stats_map['like'] = count
+                    except NoSuchElementException:
+                        pass
+                    tweet_data['stats'] = stats_map
+
+                    tweets.append(tweet_data)
+                    processed_tweet_ids.add(tweet_id)
+                    
                 except Exception as e:
-                    logger.error(f"[Executor] Error parsing tweet body (ID={tweet_id}): {e}", exc_info=True)
+                    logger.error(f"[Executor] Error processing tweet: {str(e)}")
                     continue
                     
             return tweets
             
-        except TimeoutException:
-            logger.error(f"[Executor] Timeout waiting for tweets for user {username} on {self.nitter_instance}")
-            return [] 
-        except WebDriverException as e:
-            logger.error(f"[Executor] Browser error on {self.nitter_instance}: {e}")
+        except TimeoutException as te:
+            logger.error(f"[Executor] Timeout loading page for {username}: {te}")
             return []
         except Exception as e:
-            logger.error(f"[Executor] Unexpected error scraping {self.nitter_instance}: {e}", exc_info=True)
+            logger.error(f"[Executor] Error scraping tweets for {username}: {e}", exc_info=True)
             return []
-    # --- End Synchronous Helper Method --- 
-            
+        finally:
+            # Ensure we're not leaving any stale connections
+            if hasattr(self, 'session'):
+                self.session.close()
+
     async def search_users(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search for users on Nitter and return basic profile info."""
-        if not self.driver:
-            self.driver = self.setup_driver()
+        driver = await self.get_driver()
+        if not driver:
+            logger.error("Failed to get WebDriver instance for user search.")
+            return []
             
-        search_url = f"{self.nitter_instance}/search?f=users&q={query}" # Use f=users for user search
+        search_url = f"{self.nitter_instance}/search?f=users&q={quote_plus(query)}" 
         logger.info(f"Navigating to user search: {search_url}")
-        
+        users = []
+
         try:
-            self.driver.get(search_url)
+            await asyncio.to_thread(driver.get, search_url)
             
-            # Wait for search results (user profile cards) to load
-            # Adjust selector based on Nitter's current structure for user search results
-            profile_card_selector = ".timeline-item .profile-card"
-            WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, profile_card_selector))
+            # Use asyncio.to_thread for WebDriver waits within async function
+            wait = WebDriverWait(driver, 15)
+            user_elements = await asyncio.to_thread(
+                wait.until, 
+                EC.presence_of_all_elements_located((By.CLASS_NAME, "profile-card"))
             )
             
-            logger.info(f"User search results loaded for query: {query}")
-            
-            # Extract user information
-            users_found = []
-            profile_cards = self.driver.find_elements(By.CSS_SELECTOR, profile_card_selector)
-            
-            logger.info(f"Found {len(profile_cards)} profile cards.")
+            logger.info(f"Found {len(user_elements)} potential user elements for query '{query}'. Limiting to {limit}")
 
-            for card in profile_cards[:limit]:
+            # Process elements - keep this part synchronous as it reads properties
+            for user_elem in user_elements[:limit]:
                 try:
-                    # Extract details - Adjust selectors as needed for Nitter's HTML
-                    name_element = card.find_element(By.CSS_SELECTOR, ".fullname")
-                    handle_element = card.find_element(By.CSS_SELECTOR, ".username")
-                    # Nitter might not expose a stable user ID easily in search results
-                    # We might need to derive it or use the handle as a proxy ID initially
-                    user_handle = handle_element.text.lstrip('@') # Remove leading @
-                    user_name = name_element.text
-                    user_id = f"handle_{user_handle}" # Create a temporary ID based on handle
+                    # These are synchronous Selenium calls, okay within this loop after async wait
+                    handle_elem = user_elem.find_element(By.CLASS_NAME, "profile-card-username")
+                    handle = handle_elem.text.strip("@")
                     
-                    user_data = {
-                        'id': user_id, 
-                        'handle': user_handle,
-                        'name': user_name
+                    name_elem = user_elem.find_element(By.CLASS_NAME, "profile-card-fullname")
+                    name = name_elem.text.strip()
+                    
+                    profile_link_elem = user_elem.find_element(By.CLASS_NAME, "profile-card-link")
+                    profile_url_path = profile_link_elem.get_attribute("href")
+                    # Ensure the profile URL is absolute
+                    profile_url = urljoin(search_url, profile_url_path)
+                    
+                    user_obj = {
+                        'id': f"twitter_user_{handle}",
+                        'handle': handle,
+                        'name': name,
+                        'url': profile_url,
+                        'metadata': {
+                            'platform': 'twitter',
+                            'source': 'nitter_search'
+                        }
                     }
-                    users_found.append(user_data)
-                    # logger.debug(f"Parsed user: {user_data}")
+                    users.append(user_obj)
                     
-                except Exception as parse_err:
-                    logger.error(f"Error parsing profile card for query '{query}': {parse_err}", exc_info=True)
-                    continue # Skip this card if parsing fails
-                    
-            logger.info(f"Successfully parsed {len(users_found)} users for query: {query}")
-            return users_found
+                except Exception as e:
+                    logger.error(f"Error processing user element: {e}", exc_info=True)
+                    continue # Skip this user if parsing fails
             
+            logger.info(f"Successfully processed {len(users)} users for query '{query}'.")
+            return users
+        
         except TimeoutException:
-            logger.warning(f"Timeout waiting for user search results for query '{query}'. No users found or page didn't load.")
-            return [] # Return empty list if no results found or timeout
-        except WebDriverException as e:
-            logger.error(f"Browser error during user search for query '{query}': {e}", exc_info=True)
-            return [] # Return empty list on browser errors
-        except Exception as e:
-            logger.error(f"Unexpected error during user search for query '{query}': {e}", exc_info=True)
+            logger.error(f"Timeout accessing search URL: {search_url}")
             return []
+        except WebDriverException as e:
+            logger.error(f"Browser error during user search: {e}")
+            # Consider attempting driver restart if appropriate
+            return []
+        except Exception as e:
+             logger.error(f"Unexpected error during user search for '{query}': {e}", exc_info=True)
+             return []
+
+    async def close_driver(self):
+        """Close the WebDriver instance if it exists."""
+        async with self.lock:
+            if self.driver:
+                logger.info("Closing WebDriver instance.")
+                try:
+                    await asyncio.to_thread(self.driver.quit)
+                except Exception as e:
+                    logger.error(f"Error closing WebDriver: {e}")
+                finally:
+                    self.driver = None
 
     def cleanup(self):
         """Clean up browser resources."""
-        if self.driver:
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.error(f"Error closing browser: {e}")
-            finally:
-                self.driver = None
-                self.tabs.clear() 
+        try:
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except Exception as quit_error:
+                    logger.error(f"Error during driver quit: {quit_error}")
+                finally:
+                    self.driver = None
+                    
+            if hasattr(self, 'session'):
+                try:
+                    self.session.close()
+                except Exception as session_error:
+                    logger.error(f"Error closing session: {session_error}")
+                    
+            logger.info("Browser resources cleaned up successfully")
+        except Exception as e:
+            logger.error(f"Error in cleanup: {e}", exc_info=True)
 
     async def scrape_profile(self, handle: str, base_url: str = "https://nitter.net") -> List[Dict[str, Any]]:
         """Scrapes tweets from a user's profile page on Nitter."""

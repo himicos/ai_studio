@@ -169,14 +169,13 @@ def get_memory_node(node_id: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error getting memory node {node_id}: {e}")
         return None
 
-def generate_embedding_for_node_faiss(node_id: str, text: str = None, embedding: np.ndarray = None) -> bool:
+def generate_embedding_for_node_faiss(node_id: str, text: str = None) -> bool:
     """
     Generate and store embedding for a memory node using FAISS.
     
     Args:
         node_id (str): Node ID from memory_nodes table.
         text (str, optional): Text content to embed. If None, will fetch from database.
-        embedding (np.ndarray, optional): Pre-computed embedding. If None, will generate from text.
         
     Returns:
         bool: True if successful, False otherwise.
@@ -185,69 +184,122 @@ def generate_embedding_for_node_faiss(node_id: str, text: str = None, embedding:
         # 1. Get the vector store
         vector_store = get_vector_store()
         
-        if embedding is not None:
-            # Use provided embedding
-            node_content = text
-            logger.debug(f"Using provided embedding for node {node_id}")
-        else:
-            # Get node content and generate embedding
-            node = None
-            if text is not None:
-                node_content = text
-            else:
-                # Get node content from main DB
-                node = get_memory_node(node_id)
-                if not node or not node.get('content'):
-                    logger.error(f"Node {node_id} not found or has no content for embedding.")
-                    return False
-                node_content = node['content']
-            
-            logger.debug(f"Generating FAISS embedding for node {node_id}...")
-        
-        # 2. Prepare metadata
-        if node is None and text is not None:
-            # If we're using provided text but don't have the node details,
-            # try to fetch them for metadata
+        # Get node content if not provided
+        if text is None:
             node = get_memory_node(node_id)
+            if not node or not node.get('content'):
+                logger.error(f"No content found for node {node_id}")
+                return False
+            text = node.get('content')
+        
+        # Generate embedding
+        try:
+            # Ensure text is a string
+            if not isinstance(text, str):
+                logger.warning(f"Converting text content to string for node {node_id}")
+                text = str(text)
             
-        # 3. Create metadata
-        metadata = {
-            "id": node_id,
-            "type": node.get('type') if node else None,
-            "created_at": node.get('created_at', int(datetime.now().timestamp())) if node else int(datetime.now().timestamp()),
-            "tags": node.get('tags', []) if node else []
-        }
+            # Log text length and preview
+            text_preview = text[:100] + "..." if len(text) > 100 else text
+            logger.debug(f"Generating embedding for node {node_id} with text ({len(text)} chars): {text_preview}")
+            
+            embedding = vector_store.model.encode(text, convert_to_numpy=True)
+            if not isinstance(embedding, np.ndarray):
+                embedding = np.array(embedding)
+            
+            # Ensure embedding is 1D
+            if len(embedding.shape) > 1:
+                embedding = embedding.flatten()
+                
+            logger.debug(f"Generated embedding with shape {embedding.shape} for node {node_id}")
+            
+        except Exception as e:
+            logger.error(f"Error generating embedding for node {node_id}: {e}")
+            return False
         
-        # 4. Add to the vector store
-        success = False
-        if embedding is not None:
-            # Use provided embedding
+        # 2. Add to FAISS index
+        try:
+            # Get metadata
+            metadata = {
+                'id': node_id,
+                'content': text[:1000],  # Store truncated content
+                'created_at': int(time.time()),
+                'updated_at': int(time.time())
+            }
+            
+            # Add to FAISS using add_embedding method
             success = vector_store.add_embedding(embedding, metadata)
-        else:
-            # Generate embedding from text
-            success = vector_store.add_text(node_content, metadata)
-        
-        if success:
-            # 5. Update flag in main DB
+            if not success:
+                logger.error(f"Failed to add embedding to vector store for node {node_id}")
+                return False
+                
+            vector_store.save()  # Save after each addition
+            
+            # Update has_embedding flag in database
             conn = get_db_connection()
             cursor = conn.cursor()
-            
-            cursor.execute('''
-            UPDATE memory_nodes SET has_embedding = 1, updated_at = ? WHERE id = ?
-            ''', (int(datetime.now().timestamp()), node_id))
-            
+            cursor.execute(
+                "UPDATE memory_nodes SET has_embedding = 1 WHERE id = ?",
+                (node_id,)
+            )
             conn.commit()
             conn.close()
             
-            logger.info(f"Successfully stored FAISS embedding for node {node_id}.")
+            logger.info(f"Successfully added embedding for node {node_id} to FAISS")
             return True
-        else:
-            logger.error(f"Failed to add node {node_id} to FAISS vector store.")
+            
+        except Exception as e:
+            logger.error(f"Error adding embedding to FAISS for node {node_id}: {e}")
             return False
             
     except Exception as e:
-        logger.error(f"Error generating FAISS embedding for node {node_id}: {e}")
+        logger.error(f"Error in generate_embedding_for_node_faiss: {e}")
+        traceback.print_exc()
         return False
+
+def create_node_with_embedding(node_data: Dict[str, Any], async_embedding: bool = True) -> Optional[str]:
+    """
+    Create a new memory node and generate its embedding.
+    
+    Args:
+        node_data (Dict[str, Any]): Node data to create
+        async_embedding (bool): Whether to generate embedding asynchronously
+        
+    Returns:
+        Optional[str]: Node ID if successful, None otherwise
+    """
+    try:
+        # Import here to avoid circular imports
+        from ai_studio_package.infra.db_enhanced import create_memory_node
+        from ai_studio_package.infra.task_manager import create_embedding_task
+        
+        # Create the memory node
+        node_id = create_memory_node(node_data)
+        if not node_id:
+            logger.error("Failed to create memory node")
+            return None
+            
+        # Generate embedding
+        if async_embedding:
+            # Create async task
+            create_embedding_task(
+                node_id=node_id,
+                text=node_data['content'],
+                metadata={'node_type': node_data.get('type', 'unknown')}
+            )
+        else:
+            # Generate embedding synchronously
+            success = generate_embedding_for_node_faiss(node_id, node_data['content'])
+            if not success:
+                logger.error(f"Failed to generate embedding for node {node_id}")
+                return None
+                
+        return node_id
+        
+    except Exception as e:
+        logger.error(f"Error in create_node_with_embedding: {e}")
+        traceback.print_exc()
+        return None
 
 def search_similar_nodes_faiss(
     query_text: str,

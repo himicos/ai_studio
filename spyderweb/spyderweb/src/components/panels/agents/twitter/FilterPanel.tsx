@@ -10,7 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 
 // Match the simplified SortOption from earlier rebuild steps
-export type SortOption = 'date' | 'score' | 'likes' | 'retweets' | 'replies'; 
+export type SortOption = 'date_posted' | 'score' | 'likes' | 'retweets' | 'replies'; 
 
 interface FilterPanelProps {
   keyword: string;
@@ -49,7 +49,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             <SelectValue placeholder="Sort by..." />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="date">Date</SelectItem>
+            <SelectItem value="date_posted">Date</SelectItem>
             <SelectItem value="score">Score</SelectItem>
             <SelectItem value="likes">Likes</SelectItem>
             <SelectItem value="retweets">Retweets</SelectItem>
