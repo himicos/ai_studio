@@ -1,0 +1,445 @@
+#!/usr/bin/env python
+"""
+Script to process newly added data (Reddit posts, Tweets, etc.)
+and generate summaries and/or embeddings for storage in FAISS.
+"""
+
+import logging
+import argparse
+import time
+import json
+import asyncio
+import functools
+from typing import List, Dict, Any, Optional
+from datetime import datetime as dt
+
+# --- Add project root to path to allow infra imports ---
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# ------------------------------------------------------
+
+# Import DB functionality
+from ai_studio_package.infra import db
+# Store original path for debugging
+ORIGINAL_DB_PATH = db.DB_PATH
+# Check if memory directory exists
+memory_path = os.path.join("memory", "memory.sqlite")
+data_path = os.path.join("data", "memory.sqlite")
+
+if os.path.exists(memory_path):
+    # Override to the correct path if memory/memory.sqlite exists
+    db.DB_PATH = memory_path
+    print(f"[run_embeddings.py] Using \1 for DB_PATH")
+    # Add diagnostic info
+    try:
+        diag_conn = get_db_connection()
+        diag_cursor = diag_conn.cursor()
+        diag_cursor.execute("SELECT COUNT(*) FROM reddit_posts")
+        reddit_count = diag_cursor.fetchone()[0]
+        diag_cursor.execute("SELECT COUNT(*) FROM memory_nodes")
+        memory_count = diag_cursor.fetchone()[0]
+        print(f"Using {db.DB_PATH} with {reddit_count} reddit_posts and {memory_count} memory_nodes")
+        diag_conn.close()
+    except Exception as e:
+        print(f"Diagnostic error: {e}")
+elif os.path.exists(data_path):
+    # Use data/memory.sqlite if it exists
+    db.DB_PATH = data_path
+    print(f"[run_embeddings.py] Using \1 for DB_PATH")
+    # Add diagnostic info
+    try:
+        diag_conn = get_db_connection()
+        diag_cursor = diag_conn.cursor()
+        diag_cursor.execute("SELECT COUNT(*) FROM reddit_posts")
+        reddit_count = diag_cursor.fetchone()[0]
+        diag_cursor.execute("SELECT COUNT(*) FROM memory_nodes")
+        memory_count = diag_cursor.fetchone()[0]
+        print(f"Using {db.DB_PATH} with {reddit_count} reddit_posts and {memory_count} memory_nodes")
+        diag_conn.close()
+    except Exception as e:
+        print(f"Diagnostic error: {e}")
+else:
+    print(f"[run_embeddings.py] Using default DB_PATH: {db.DB_PATH}")
+
+# Now import and use database functions as normal
+from ai_studio_package.infra.db import get_db_connection, init_db
+from ai_studio_package.infra.summarizer import SummarizationPipelineSingleton
+from ai_studio_package.infra.vector_adapter import generate_embedding_for_node_faiss, get_memory_node
+from ai_studio_package.infra.db_enhanced import create_memory_node # For saving summary nodes
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("EmbeddingPipeline")
+
+# --- Initialize Database ---
+# Ensure tables exist before proceeding
+try:
+    logger.info(f"Initializing database schema if necessary at {db.DB_PATH}...")
+    # Comment out init_db to prevent possible database reset
+    # init_db() 
+    logger.info("Database schema initialization SKIPPED to preserve existing data.")
+except Exception as init_err:
+    logger.error(f"Failed to initialize database: {init_err}", exc_info=True)
+    sys.exit(1) # Exit if DB can't be initialized
+# --- End Initialize Database ---
+
+# --- Configuration --- 
+DEFAULT_BATCH_SIZE = 50
+DEFAULT_MODEL_SUMMARIZER = "facebook/bart-large-cnn" # Should match singleton ideally
+DEFAULT_MODEL_EMBEDDING = "all-MiniLM-L6-v2" # Should match vector_adapter
+
+def get_reddit_posts_needing_summary(limit: int) -> List[Dict[str, Any]]:
+    """Fetches raw Reddit posts that haven't been processed into summary nodes yet."""
+    conn = None
+    posts = []
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Debug: Check if reddit_posts table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='reddit_posts'")
+        table_exists = cursor.fetchone() is not None
+        logger.info(f"reddit_posts table exists: {table_exists}")
+        
+        if not table_exists:
+            logger.error("reddit_posts table does not exist in the database!")
+            return posts
+            
+        # Debug: Get total count of reddit posts
+        cursor.execute("SELECT COUNT(*) FROM reddit_posts")
+        total_count = cursor.fetchone()[0]
+        logger.info(f"Total reddit_posts in database: {total_count}")
+        
+        # Debug: Check memory_nodes table
+        cursor.execute("SELECT COUNT(*) FROM memory_nodes")
+        nodes_count = cursor.fetchone()[0]
+        logger.info(f"Total memory_nodes in database: {nodes_count}")
+        
+        # We need a way to track processed posts. 
+        # Option 1: Add an 'is_summarized' flag to reddit_posts table.
+        # Option 2: Check if a corresponding 'reddit_summary_{id}' exists in memory_nodes.
+        # Let's try Option 2 for now, though less efficient for large numbers.
+        query = """
+            SELECT rp.id, rp.title, rp.selftext, rp.subreddit, rp.created_utc, rp.author, rp.score, rp.num_comments, rp.url, rp.permalink
+            FROM reddit_posts rp
+            LEFT JOIN memory_nodes mn ON mn.id = 'reddit_summary_' || rp.id
+            WHERE mn.id IS NULL 
+            ORDER BY rp.created_utc DESC -- Process newest first
+            LIMIT ? 
+        """
+        logger.info(f"Executing query: {query} with limit {limit}")
+        
+        # Debug: Check if the query directly gets rows
+        cursor.execute("SELECT id FROM reddit_posts LIMIT 5")
+        sample_ids = [row[0] for row in cursor.fetchall()]
+        logger.info(f"Direct sample post IDs: {sample_ids}")
+        
+        # Debug: Get sample memory nodes to check prefix
+        cursor.execute("SELECT id FROM memory_nodes WHERE id LIKE 'reddit_summary_%' LIMIT 5")
+        sample_summaries = [row[0] for row in cursor.fetchall()]
+        logger.info(f"Sample summary nodes: {sample_summaries}")
+        
+        # Now run the actual query
+        cursor.execute(query, (limit,))
+        rows = cursor.fetchall()
+        posts = [dict(row) for row in rows]
+        logger.info(f"Found {len(posts)} Reddit posts potentially needing summarization.")
+        
+        # Debug: Print first few post IDs if any found
+        if posts:
+            sample_ids = [p['id'] for p in posts[:5]]
+            logger.info(f"Sample post IDs: {sample_ids}")
+        else:
+            logger.info("No posts found needing summaries")
+            
+            # Debug: Check for one specific post directly
+            if sample_ids:
+                test_id = sample_ids[0]
+                cursor.execute("SELECT mn.id FROM memory_nodes mn WHERE mn.id = ?", (f"reddit_summary_{test_id}",))
+                exists = cursor.fetchone() is not None
+                logger.info(f"Post {test_id} already has summary: {exists}")
+                
+    except Exception as e:
+        logger.error(f"Error fetching Reddit posts needing summary: {e}", exc_info=True)
+    finally:
+        if conn: conn.close()
+    return posts
+
+def get_nodes_needing_embedding(limit: int, node_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetches memory nodes that have has_embedding=0."""
+    conn = None
+    nodes = []
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = "SELECT id, content, type FROM memory_nodes WHERE has_embedding = 0"
+        params = []
+        if node_type:
+            query += " AND type = ?"
+            params.append(node_type)
+        query += " ORDER BY created_at DESC LIMIT ?" # Process newest first
+        params.append(limit)
+        
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        nodes = [dict(row) for row in rows]
+        logger.info(f"Found {len(nodes)} memory nodes (type: {node_type or 'any'}) needing embedding.")
+    except Exception as e:
+        logger.error(f"Error fetching nodes needing embedding: {e}", exc_info=True)
+    finally:
+        if conn: conn.close()
+    return nodes
+
+def run_summarization_sync(text: str, summarizer: Any, tokenizer: Any) -> Optional[str]:
+    """Synchronous helper to run the summarization pipeline."""
+    if not summarizer or not tokenizer:
+        logger.error("Summarizer/tokenizer not available for sync call.")
+        return None
+    try:
+        # Use a safe, fixed max_length instead of getting it from the tokenizer (which causes overflow)
+        # max_input_length = getattr(tokenizer, 'model_max_length', 1024)
+        # safe_max_length = max_input_length - 10 
+        safe_max_length = 1000  # Fixed safe value that won't cause int overflow
+
+        inputs = tokenizer(text, return_tensors='pt', max_length=safe_max_length, truncation=True)
+        truncated_text = tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True)
+
+        if len(truncated_text) < 20: # More reasonable length check
+             logger.warning(f"Input text too short after truncation ('{truncated_text[:50]}...'), skipping summary.")
+             return None
+             
+        summary_result = summarizer(truncated_text, max_length=150, min_length=30, do_sample=False)
+        return summary_result[0]['summary_text']
+    except Exception as e:
+        logger.error(f"Summarization pipeline error: {e}", exc_info=True) # Log full error
+        return None
+
+async def process_reddit_summaries(limit: int):
+    """Fetches Reddit posts, summarizes them, and saves as memory nodes."""
+    logger.info("--- Starting Reddit Summary Processing --- ")
+    posts_to_process = get_reddit_posts_needing_summary(limit)
+    if not posts_to_process:
+        logger.info("No new Reddit posts found needing summarization.")
+        return []
+
+    summarizer = SummarizationPipelineSingleton.get_pipeline()
+    tokenizer = SummarizationPipelineSingleton.get_tokenizer()
+    if not summarizer or not tokenizer:
+        logger.error("Summarization pipeline failed to initialize. Cannot process Reddit summaries.")
+        return []
+
+    loop = asyncio.get_running_loop()
+    processed_count = 0
+    failed_count = 0
+    nodes_created = [] # Keep track of nodes created in this run for embedding
+
+    for post in posts_to_process:
+        try:
+            post_id = post['id']
+            title = post.get('title', '')
+            selftext = post.get('selftext', '')
+            text_to_summarize = f"{title}\n\n{selftext}".strip()
+
+            if not text_to_summarize:
+                logger.info(f"Skipping summary for post {post_id} (no text content)." )
+                continue
+            
+            # --- Run Summarization (potentially in executor) --- 
+            logger.debug(f"Summarizing Reddit post {post_id}...")
+            summary_text = await loop.run_in_executor(
+                None,
+                functools.partial(run_summarization_sync, text_to_summarize, summarizer, tokenizer)
+            )
+            
+            if not summary_text:
+                logger.warning(f"Summarization failed or returned empty for post {post_id}. Skipping.")
+                failed_count += 1
+                continue
+            # --- End Summarization --- 
+
+            # --- Prepare and Save Summary Node --- 
+            node_id = f"reddit_summary_{post_id}"
+            tags = ['reddit', 'summary', post.get('subreddit')]
+            metadata = {
+                'original_post_id': post_id,
+                'source_type': 'reddit',
+                'subreddit': post.get('subreddit'),
+                'title': title,
+                'author': post.get('author'),
+                'upvotes': post.get('score'),
+                'num_comments': post.get('num_comments'),
+                'url': post.get('url'),
+                'permalink': post.get('permalink'),
+                'model_used': SummarizationPipelineSingleton.get_model_name(), 
+                'created_utc': int(time.mktime(dt.fromisoformat(post['created_utc']).timetuple())) if post.get('created_utc') else int(time.time()), # Convert ISO back to timestamp
+                'processed_at': int(time.time())
+            }
+            memory_node_data = {
+                "id": node_id,
+                "type": "reddit_summary",
+                "content": summary_text,
+                "tags": json.dumps([t for t in tags if t]),
+                "created_at": metadata['created_utc'],
+                "updated_at": metadata['processed_at'],
+                "source_id": post.get('permalink'),
+                "source_type": "reddit",
+                "metadata": json.dumps(metadata),
+                "has_embedding": 0 
+            }
+            
+            conn = None
+            try:
+                conn = get_db_connection()
+                # Use synchronous create_memory_node or make an async helper
+                success = create_memory_node(conn, memory_node_data)
+                if success:
+                    conn.commit()
+                    logger.info(f"Successfully created summary node {node_id}")
+                    processed_count += 1
+                    nodes_created.append(node_id) # Add for embedding later
+                else:
+                    # create_memory_node likely logged the error or conflict
+                    failed_count += 1
+                    conn.rollback() # Rollback if insert failed
+            except Exception as db_err:
+                logger.error(f"DB error creating summary node {node_id}: {db_err}", exc_info=True)
+                if conn: conn.rollback()
+                failed_count += 1
+            finally:
+                if conn: conn.close()
+            # --- End Save Node --- 
+            
+        except Exception as outer_err:
+            logger.error(f"Outer error processing post {post.get('id', 'N/A')} for summary: {outer_err}", exc_info=True)
+            failed_count += 1
+            
+    logger.info(f"--- Reddit Summary Processing Finished. Processed: {processed_count}, Failed/Skipped: {failed_count} --- ")
+    # Return list of newly created node IDs that now need embedding
+    return nodes_created 
+
+async def process_embeddings(limit: int, node_type: Optional[str] = None, node_ids: Optional[List[str]] = None):
+    """Fetches nodes missing embeddings and triggers embedding generation."""
+    logger.info(f"--- Starting Embedding Processing (Type: {node_type or 'any'}, Limit: {limit}) --- ")
+    
+    nodes_to_embed = []
+    if node_ids:
+        logger.info(f"Processing specific list of {len(node_ids)} node IDs for embedding.")
+        # Fetch content for specific nodes (ensure they still need embedding)
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            placeholders = ',' .join('?' * len(node_ids))
+            query = f"SELECT id, content, type FROM memory_nodes WHERE has_embedding = 0 AND id IN ({placeholders}) LIMIT ?"
+            params = node_ids + [limit]
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            nodes_to_embed = [dict(row) for row in rows]
+            logger.info(f"Found {len(nodes_to_embed)} specified nodes actually needing embedding.")
+        except Exception as e:
+            logger.error(f"Error fetching specific nodes for embedding: {e}", exc_info=True)
+        finally:
+            if conn: conn.close()
+    else:
+        # Fetch nodes generically
+        nodes_to_embed = get_nodes_needing_embedding(limit, node_type)
+
+    if not nodes_to_embed:
+        logger.info("No nodes found needing embedding in this batch.")
+        return
+
+    loop = asyncio.get_running_loop()
+    processed_count = 0
+    failed_count = 0
+
+    for node in nodes_to_embed:
+        node_id = node['id']
+        content = node.get('content', '')
+        if not content:
+            logger.warning(f"Node {node_id} has no content. Skipping embedding.")
+            # Optionally mark as failed/skipped in DB? Or just update has_embedding= -1 ?
+            failed_count += 1
+            continue
+        
+        logger.debug(f"Queueing embedding for node {node_id} (Type: {node.get('type')})...")
+        try:
+            # Run generate_embedding_for_node_faiss in executor
+            # This function handles its own DB update for has_embedding flag
+            success = await loop.run_in_executor(
+                None,
+                functools.partial(generate_embedding_for_node_faiss, node_id, text=content) # Pass content
+            )
+            if success:
+                processed_count += 1
+                logger.debug(f"Embedding successful for node {node_id}.")
+            else:
+                failed_count += 1
+                # Error is logged within generate_embedding_for_node_faiss
+                logger.warning(f"Embedding failed for node {node_id}.")
+        except Exception as embed_err:
+            logger.error(f"Error scheduling/running embedding for node {node_id}: {embed_err}", exc_info=True)
+            failed_count += 1
+            
+    logger.info(f"--- Embedding Processing Finished. Processed: {processed_count}, Failed/Skipped: {failed_count} --- ")
+
+async def main(args):
+    """Main execution flow."""
+    
+    # Add a small delay to allow DB changes from other processes to become visible
+    logger.info("Waiting 2 seconds for potential DB propagation...")
+    await asyncio.sleep(2)
+    
+    nodes_for_embedding = [] # Initialize as empty list
+    
+    if args.process_reddit or args.process_all:
+        newly_summarized_node_ids = await process_reddit_summaries(args.limit)
+        if newly_summarized_node_ids: # Check if the list is not empty/None
+            nodes_for_embedding.extend(newly_summarized_node_ids)
+        
+    # Fetch other nodes needing embedding based on flags
+    nodes_to_fetch_types = []
+    if args.process_tweets:
+        nodes_to_fetch_types.append('tweet')
+    if args.node_type:
+         # Make sure not to add duplicate types if --all is also specified
+        if args.node_type not in nodes_to_fetch_types:
+            nodes_to_fetch_types.append(args.node_type)
+    if args.process_all:
+        # Fetch all types if --all is specified, potentially overriding specific types
+        logger.info("Processing all node types needing embedding due to --process-all flag.")
+        # Fetch all nodes needing embedding regardless of type
+        all_nodes = get_nodes_needing_embedding(args.limit, None)
+        nodes_for_embedding.extend([n['id'] for n in all_nodes])
+        nodes_to_fetch_types = [] # Clear specific types as we got all
+    
+    # Fetch specifically requested types if --all wasn't used
+    for node_type in nodes_to_fetch_types:
+        typed_nodes = get_nodes_needing_embedding(args.limit, node_type)
+        nodes_for_embedding.extend([n['id'] for n in typed_nodes])
+
+    # Deduplicate and process embeddings
+    if nodes_for_embedding: # Check if list is not empty before creating set
+        unique_node_ids = list(set(nodes_for_embedding))
+        logger.info(f"Total unique nodes identified for embedding: {len(unique_node_ids)}")
+        await process_embeddings(args.limit, node_type=None, node_ids=unique_node_ids)
+    else:
+        logger.info("No nodes identified for embedding processing in this run.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Summarization and Embedding Pipeline for AI Studio Data")
+    parser.add_argument("--limit", type=int, default=DEFAULT_BATCH_SIZE, help="Max number of items to process per type per run")
+    parser.add_argument("--process-reddit", action="store_true", help="Process new Reddit posts for summarization and embedding")
+    parser.add_argument("--process-tweets", action="store_true", help="Process new Tweets for embedding")
+    parser.add_argument("--process-all", action="store_true", help="Process Reddit posts and all node types needing embedding")
+    parser.add_argument("--node-type", type=str, default=None, help="Process only a specific memory node type for embedding (e.g., 'concept')")
+    # Add more arguments as needed (e.g., --model-name, --force-reembed)
+
+    args = parser.parse_args()
+
+    if not any([args.process_reddit, args.process_tweets, args.process_all, args.node_type]):
+        logger.warning("No processing flags specified. Use --process-reddit, --process-tweets, --process-all, or --node-type <type>.")
+        parser.print_help()
+    else:
+        asyncio.run(main(args)) 

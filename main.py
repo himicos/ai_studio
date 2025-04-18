@@ -154,6 +154,99 @@ from tools.burner_manager import BurnerManager
 from ai_studio_package.data.twitter_tracker import TwitterTracker
 from ai_studio_package.data.browser_manager import BrowserManager
 from data.reddit_tracker import RedditTracker as RedditAgentTracker
+# Import Self-Improvement Loop components
+from ai_studio_package.infra.execution_logs import init_execution_logs_table, track_execution
+
+# Middleware for tracking API requests
+@app.middleware("http")
+async def track_api_requests_middleware(request: Request, call_next):
+    """
+    Middleware to track all API requests for the Self-Improvement Loop
+    """
+    # Only track API routes
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    
+    # Get the route path and method
+    path = request.url.path
+    method = request.method
+    task_name = f"{method}:{path}"
+    
+    # Record start time
+    start_time = datetime.now().timestamp() * 1000
+    
+    # Default status and response
+    status_code = 500
+    response = None
+    
+    try:
+        # Process the request
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    except Exception as e:
+        # Log any exceptions
+        logger.error(f"Error processing request {path}: {str(e)}")
+        raise
+    finally:
+        # Record end time
+        end_time = datetime.now().timestamp() * 1000
+        latency = (end_time - start_time) / 1000  # in seconds
+        
+        # Track the execution in the background
+        try:
+            from ai_studio_package.infra.execution_logs import log_execution
+            
+            # Log success or error
+            status = "success" if status_code < 400 else "error"
+            error_msg = None
+            if status == "error":
+                error_msg = f"HTTP error {status_code}"
+            
+            # Create metadata
+            metadata = {
+                "method": method,
+                "path": path,
+                "status_code": status_code,
+                "client_ip": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent")
+            }
+            
+            # Log the execution asynchronously
+            asyncio.create_task(
+                log_execution_async(
+                    task=task_name,
+                    status=status,
+                    start_time=int(start_time),
+                    end_time=int(end_time),
+                    latency=latency,
+                    error=error_msg,
+                    metadata=metadata
+                )
+            )
+        except Exception as log_err:
+            logger.error(f"Error logging execution: {log_err}")
+
+async def log_execution_async(
+    task: str,
+    status: str,
+    start_time: int,
+    end_time: int, 
+    latency: float,
+    error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+):
+    """Asynchronous wrapper for the synchronous log_execution function"""
+    from ai_studio_package.infra.execution_logs import log_execution
+    log_execution(
+        task=task,
+        status=status,
+        start_time=start_time,
+        end_time=end_time,
+        latency=latency,
+        error=error,
+        metadata=metadata
+    )
 
 # Register routers
 app.include_router(settings_router, prefix="/api", tags=["settings"])
@@ -226,10 +319,10 @@ async def send_heartbeat(websocket: WebSocket):
 # Serve static files (frontend)
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
-# Serve frontend for all other routes
+# Status endpoint
 @app.get("/api/status")
 async def get_status():
-    """Get system status"""
+    """Get system status information"""
     try:
         # Get memory stats
         try:
@@ -246,9 +339,9 @@ async def get_status():
         # Get proxy stats
         try:
             proxy_stats = {
-                "total": len(app.state.burner_manager.proxies),
-                "working": len(app.state.burner_manager.working_proxies),
-                "failed": len(app.state.burner_manager.failed_proxies)
+                "total": len(app.state.burner_manager.proxies) if hasattr(app.state, 'burner_manager') and app.state.burner_manager else 0,
+                "working": len(app.state.burner_manager.working_proxies) if hasattr(app.state, 'burner_manager') and app.state.burner_manager else 0,
+                "failed": len(app.state.burner_manager.failed_proxies) if hasattr(app.state, 'burner_manager') and app.state.burner_manager else 0
             }
         except Exception as e:
             logger.error(f"Error getting proxy stats: {e}")
@@ -261,8 +354,8 @@ async def get_status():
         # Get scanner stats
         try:
             scanner_stats = {
-                "reddit": app.state.reddit_scanner.get_status() if app.state.reddit_scanner else {"status": "not_initialized"},
-                "twitter": app.state.twitter_scanner.get_status() if app.state.twitter_scanner else {"status": "not_initialized"}
+                "reddit": app.state.reddit_scanner.get_status() if hasattr(app.state, 'reddit_scanner') and app.state.reddit_scanner else {"status": "not_initialized"},
+                "twitter": app.state.twitter_scanner.get_status() if hasattr(app.state, 'twitter_scanner') and app.state.twitter_scanner else {"status": "not_initialized"}
             }
         except Exception as e:
             logger.error(f"Error getting scanner stats: {e}")
@@ -271,16 +364,28 @@ async def get_status():
                 "twitter": {"status": "error"}
             }
         
+        # Get vector store stats
+        try:
+            from ai_studio_package.infra.vector_adapter import get_vector_store
+            vector_store = get_vector_store()
+            vector_stats = vector_store.get_stats() if vector_store else {"vector_count": 0, "metadata_count": 0}
+        except Exception as e:
+            logger.error(f"Error getting vector store stats: {e}")
+            vector_stats = {"vector_count": 0, "metadata_count": 0}
+        
         return {
-            "status": "running",
+            "status": "ok",
+            "timestamp": datetime.now().isoformat(),
             "proxy": proxy_stats,
             "memory": memory_stats,
-            "scanners": scanner_stats
+            "scanners": scanner_stats,
+            "vector_store": vector_stats
         }
     except Exception as e:
         logger.error(f"Error getting system status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
 
+# Serve frontend for all other routes
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
     """
@@ -310,6 +415,10 @@ async def startup_event():
     # Initialize main database
     init_db()
     logger.info("Main database initialized.")
+    
+    # Initialize execution logs table for Self-Improvement Loop
+    init_execution_logs_table()
+    logger.info("Execution logs table initialized for Self-Improvement Loop.")
     
     # Initialize vector database
     # init_vector_db()

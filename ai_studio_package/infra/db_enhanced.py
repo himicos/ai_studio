@@ -69,7 +69,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row  # Return rows as dictionaries
     # Enable Write-Ahead Logging for potentially better concurrency
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA journal_mode=WAL;") # Re-enable WAL mode
         logger.info("SQLite journal_mode set to WAL.")
     except Exception as e:
         logger.warning(f"Could not set journal_mode to WAL: {e}")

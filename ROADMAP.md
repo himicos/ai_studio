@@ -8,10 +8,57 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ## Feature Roadmap
 
-### Current Focus: Phase 4 Prerequisite
+### Current Focus: System Foundation
 
-#### 7. Actionable Nodes [CURRENT FOCUS]
-- **Priority**: Highest
+#### 1. Live Semantic Query Highlighting [✅ IMPLEMENTED]
+- **Priority**: High
+- **Effort**: Low (1x)
+- **Impact**: 30x UX, 10x search capability
+- **Description**: Highlight relevant nodes and paths based on cosine similarity when users enter a question or term
+- **Implementation**:
+  - ✅ Add query input field to graph container
+  - ✅ Use existing `searchMemoryNodes()` function with similarity threshold
+  - ✅ Apply color gradient to nodes based on similarity score
+  - ✅ Highlight connecting paths between highly similar nodes
+  - ✅ Add visual legend for similarity scale
+- **Status**: 
+  - ✅ Basic implementation completed with node highlighting
+  - ✅ Enhanced zooming to focus on relevant nodes
+  - ✅ Color-coding based on similarity scores
+  - ⚠️ Minor linter errors being addressed
+
+#### 2. Memory Weight / Attention Encoding [Frontend Remaining]
+- **Priority**: High
+- **Effort**: Low (0.5x Frontend/Logic Remaining)
+- **Impact**: 25x visibility into system focus
+- **Description**: Vary node/edge size or opacity based on importance, recent activation, or frequency of use. Backend endpoint `/nodes/weights` implemented.
+- **Implementation**:
+  - ✅ Backend endpoint is implemented and functional
+  - Connect frontend to backend endpoint
+  - Create node sizing function based on metadata
+  - Implement tracking logic in `/nodes/track-access` endpoint
+  - Add toggle for different sizing metrics (frequency, recency, importance)
+
+### Phase 1: Foundation Enhancements
+
+#### 3. Self-Improvement Loop [✅ IMPLEMENTED]
+- **Priority**: High
+- **Effort**: Medium (2x)
+- **Impact**: 50x system evolution
+- **Description**: System that continuously improves itself by monitoring execution logs, generating critiques, and implementing safe refactors
+- **Implementation**:
+  - ✅ Create execution logging infrastructure with database table
+  - ✅ Implement function decorator for easy tracking integration
+  - ✅ Build Critic Agent for analyzing logs and generating insights
+  - ✅ Create Refactor Agent to implement safe improvements
+  - ✅ Add scheduler to run analysis at regular intervals
+- **Status**:
+  - ✅ Basic implementation complete
+  - ✅ All agents operational with database integration
+  - ⚠️ Gathering execution data for first round of improvements
+
+#### 4. Actionable Nodes
+- **Priority**: High
 - **Effort**: Medium (2x)
 - **Impact**: 40x operational speed
 - **Description**: Add context menu to nodes with actions like "Summarize," "Generate post," "Find similar," "Execute agent". Transforms the graph into an active workspace.
@@ -23,35 +70,9 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Add visual feedback for action execution
   - Create action history panel (optional V2)
 
-### Phase 1: Foundation Enhancements
-
-#### 1. Live Semantic Query Highlighting
-- **Priority**: High
-- **Effort**: Low (1x)
-- **Impact**: 30x UX, 10x search capability
-- **Description**: Highlight relevant nodes and paths based on cosine similarity when users enter a question or term
-- **Implementation**:
-  - Add query input field to graph container
-  - Use existing `searchMemoryNodes()` function with similarity threshold
-  - Apply color gradient to nodes based on similarity score
-  - Highlight connecting paths between highly similar nodes
-  - Add visual legend for similarity scale
-
-#### 2. Memory Weight / Attention Encoding [Backend Complete]
-- **Priority**: High
-- **Effort**: Low (1x) -> Low (0.5x Frontend/Logic Remaining)
-- **Impact**: 25x visibility into system focus
-- **Description**: Vary node/edge size or opacity based on importance, recent activation, or frequency of use. Backend endpoint `/nodes/weights` implemented.
-- **Implementation**:
-  - Extend memory node schema with `activation_score` and `last_accessed` fields (Done via metadata)
-  - Create node sizing function based on these metrics (`calculateNodeSize` in frontend - Needs Connection)
-  - Implement tracking logic in `/nodes/track-access` endpoint
-  - Implement decay function for activation over time (Optional V2)
-  - Add toggle for different sizing metrics (frequency, recency, importance)
-
 ### Phase 2: Interaction & Debugging
 
-#### 3. Agent Trace Mode (Replay Reasoning)
+#### 5. Agent Trace Mode (Replay Reasoning)
 - **Priority**: Medium
 - **Effort**: Low (1x)
 - **Impact**: 20x debugging/understanding
@@ -63,7 +84,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Implement animation of highlighted paths with sequenced timing
   - Add export option for trace data
 
-#### 4. Prompt-Context Linking
+#### 6. Prompt-Context Linking
 - **Priority**: Medium
 - **Effort**: Low (1x)
 - **Impact**: 15x prompt quality improvement
@@ -77,7 +98,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ### Phase 3: Organization & Navigation
 
-#### 5. Modular Tag Clustering
+#### 7. Modular Tag Clustering
 - **Priority**: Medium
 - **Effort**: Low (1x)
 - **Impact**: 25x clarity and organization
@@ -89,7 +110,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Create collapsible/expandable tag groups
   - Add tag-based filtering options
 
-#### 6. Memory Mode Toggle
+#### 8. Memory Mode Toggle
 - **Priority**: Medium
 - **Effort**: Low (1x)
 - **Impact**: 15x insight through multiple perspectives
@@ -103,7 +124,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ### Phase 4: Advanced Interactions
 
-#### 8. Graph AI Copilot
+#### 9. Graph AI Copilot
 - **Priority**: High
 - **Effort**: Medium (2x)
 - **Impact**: 100x interface power
@@ -119,11 +140,12 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 ## Implementation Strategy
 
 ### Current Focus
-- **Actionable Nodes**: Target completion in the next 1-2 weeks.
+- **Memory Weight Frontend Integration**: Finish connecting frontend to the backend implementation.
+- **Actionable Nodes**: Begin implementation of context menu functionality.
 
-### Quick Wins (Next 2 Weeks - Post Actionable Nodes)
-- Finish Memory Weight / Attention Encoding (Frontend/Logic)
-- Live Semantic Query Highlighting
+### Quick Wins (Next 2 Weeks)
+- Knowledge Graph UI Fixes
+- Self-Improvement Loop Enhancement (based on initial data)
 
 ### Short-Term (1 Month)
 - Agent Trace Mode
@@ -142,11 +164,12 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 
 ## Technical Dependencies
 
-1. Ensure vector embedding consistency across all node types (Addressed by FAISS migration)
-2. Create unified node access tracking system (Partially done with `/track-access` endpoint)
-3. Standardize metadata schema for all memory objects (Ongoing)
-4. Implement efficient graph rendering optimizations for larger datasets (Ongoing)
-5. Develop consistent interaction patterns for graph elements (Key for Actionable Nodes)
+1. ✅ Ensure vector embedding consistency across all node types (Addressed by FAISS migration)
+2. ✅ Create unified database configuration (Addressed by database unification)
+3. ⚠️ Create unified node access tracking system (Partially done with `/track-access` endpoint)
+4. ⚠️ Standardize metadata schema for all memory objects (Ongoing)
+5. ⚠️ Implement efficient graph rendering optimizations for larger datasets (Ongoing)
+6. ⚠️ Develop consistent interaction patterns for graph elements (Key for Actionable Nodes)
 
 ## Success Metrics
 
@@ -156,22 +179,35 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
 - **User Comprehension**: Ability to explain agent reasoning and connections
 - **Development Velocity**: Speed of implementing new features using the enhanced system
 - **Knowledge Quality**: Measured improvement in content generation using graph-derived context
+- **Self-Improvement**: Rate of successful auto-refactors and system optimizations
 
 ## System Efficiency Enhancements
 
-### 1. Vector Database Migration (SQLite → FAISS) [Largely Complete]
-- **Priority**: High -> Completed
-- **Effort**: Medium (2x) -> Done
+### 1. Vector Database Migration (SQLite → FAISS) [✅ Completed]
+- **Priority**: High
+- **Effort**: Medium (2x) 
 - **Impact**: 50x query speed, 25x scalability
-- **Description**: Replace SQLite-based vector storage with dedicated vector database (FAISS). Includes adapter layer (`vector_adapter.py`), store manager (`VectorStoreManager`), and migration script (`migrate_to_faiss.py`). Enhanced `db_enhanced.py`.
-- **Implementation**:
-  - Integrate FAISS as primary vector storage (Done)
-  - Migrate existing embeddings from SQLite to vector DB (Script created, needs final run/validation)
-  - Update semantic search interface to leverage vector DB capabilities (Done via adapter)
-  - Replace memory node access logic for faster retrieval (Done via adapter)
-  - Add index optimization for different query patterns (Future refinement)
+- **Description**: Replace SQLite-based vector storage with dedicated vector database (FAISS). Includes adapter layer (`vector_adapter.py`), store manager (`VectorStoreManager`), and migration script (`migrate_to_faiss.py`).
+- **Status**: 
+  - ✅ FAISS integration as primary vector storage
+  - ✅ Migration script created and tested
+  - ✅ Semantic search interface updated to leverage FAISS
+  - ✅ Database unification completed 
+  - ✅ Embedding pipeline fixed for all content types
 
-### 2. Model Routing System
+### 2. Self-Improvement Loop [✅ Implemented]
+- **Priority**: High
+- **Effort**: Medium (2x)
+- **Impact**: 50x system evolution
+- **Description**: System that monitors its own performance and makes targeted improvements over time
+- **Status**:
+  - ✅ Execution logging infrastructure implemented
+  - ✅ Critic Agent implemented to analyze logs
+  - ✅ Refactor Agent created to implement safe improvements
+  - ✅ Scheduled analysis of system performance
+  - ⚠️ Gathering initial execution data
+
+### 3. Model Routing System
 - **Priority**: High
 - **Effort**: Medium (2x)
 - **Impact**: 30x cost efficiency, 15x processing speed
@@ -183,7 +219,7 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Create model scoring layer to track quality-to-token ratio
   - Implement UI override for testing and development
 
-### 3. Token Cost Tracking
+### 4. Token Cost Tracking
 - **Priority**: Medium
 - **Effort**: Low (1x)
 - **Impact**: 20x cost visibility, 10x optimization opportunity
@@ -195,77 +231,27 @@ This roadmap outlines our strategic plan for enhancing the visual memory system 
   - Develop alerting system for high-cost behaviors
   - Add dashboard visualizations for cost trends
 
-### 4. Memory Pruning Logic
+### 5. Memory Pruning Logic
 - **Priority**: Medium
 - **Effort**: Medium (1.5x)
-- **Impact**: 35x memory efficiency, 20x relevance improvement
-- **Description**: Automated management of vector database size and quality through relevance-based pruning
+- **Impact**: 20x memory efficiency, 10x reducing noise
+- **Description**: Automatically identify and archive or remove low-value memory nodes based on usage patterns and importance
 - **Implementation**:
-  - Implement timestamp-based decay scoring
-  - Add relevance thresholds for retention decisions
-  - Create pruning scheduler to run at predefined intervals
-  - Develop manual pruning interface in UI
-  - Add backup mechanism for pruned but potentially useful nodes
+  - Create value scoring algorithm based on node metrics (age, usage, connectedness)
+  - Add pruning threshold configuration options
+  - Implement 3-tier storage strategy (active, archive, delete)
+  - Create archive browsing interface in UI
+  - Add manual override for node value scores
 
-### 5. Document Ingestion Pipeline
-- **Priority**: High
-- **Effort**: Medium (2x)
-- **Impact**: 40x knowledge depth, 25x research capability
-- **Description**: Expand ingestion capabilities beyond social media to include documents, web pages, and video transcripts
-- **Implementation**:
-  - Develop PDF parsing and chunking utilities
-  - Create HTML scraping and cleaning pipeline
-  - Add YouTube transcript extraction module
-  - Implement content-type detection for appropriate processing
-  - Build UI components for direct document upload
-
-### 6. Self-Learning Feedback Loop (Bonus)
+### 6. Document Ingestion Pipeline
 - **Priority**: Medium
-- **Effort**: High (3x)
-- **Impact**: 70x system intelligence, 45x autonomous improvement
-- **Description**: Enable the system to evaluate and improve its own operations through continuous feedback
+- **Effort**: Medium (2x)
+- **Impact**: 30x knowledge diversity, 15x setup efficiency
+- **Description**: Add support for ingesting and processing PDFs, web pages, and other document formats
 - **Implementation**:
-  - Implement batch summarization of related content
-  - Create embedding quality comparison framework
-  - Add metrics collection for summary effectiveness
-  - Develop automated agent improvement based on performance data
-  - Build visualization tools to track system evolution
-
-## Next Asymmetrical Execution Opportunity [Updated Focus]
-
-### Actionable Nodes: The Interactive Workspace
-With the FAISS vector database migration largely complete and providing a high-performance foundation, the next highest leverage opportunity is **Actionable Nodes**. This feature transforms the graph from a passive view into an active control surface.
-
-#### Why This Is Asymmetrical Now (High Impact / Manageable Effort):
-- **Foundation Ready**: Leverages the stable FAISS backend, reliable agents (Twitter/Reddit), and existing API endpoints (summarization, search).
-- **Direct User Value**: Immediately makes the graph more useful and reduces context switching.
-- **Synergy**: Combines visualization with operational capabilities, embodying the "AI Studio" concept.
-- **Enables Next Steps**: Provides a natural interface for triggering more complex workflows like the Graph AI Copilot later.
-
-#### Expected Outcomes:
-- **Performance**: Faster task execution by initiating actions directly from graph context.
-- **UX**: Significantly reduced clicks and navigation required for common operations.
-- **Integration**: Tighter coupling between visual memory exploration and agent/tool execution.
-- **Development**: Establishes UI patterns for direct graph interaction.
-
-#### Getting Started (Next 1-2 Weeks):
-1.  **Design Context Menu (Day 1)**
-    - Define standard actions (Summarize, Find Similar, Delete?)
-    - Define type-specific actions (e.g., "View Original Tweet/Post", "Generate Reply")
-    - Sketch UI look and feel.
-2.  **Implement Frontend Menu Component (Day 2-4)**
-    - Use a library (e.g., react-contextmenu) or build custom.
-    - Trigger menu on node right-click.
-    - Pass node ID and type to menu actions.
-3.  **Connect Actions to APIs (Day 5-8)**
-    - Wire menu options to call relevant backend endpoints (`/api/summary/`, `/api/memory/semantic-search`, agent endpoints).
-    - Handle API responses (e.g., display summary, highlight similar nodes).
-4.  **Add Visual Feedback (Day 9-10)**
-    - Show loading indicators during action execution.
-    - Provide confirmation messages (e.g., "Summary generated").
-5.  **Testing & Refinement (Day 11-14)**
-    - Test across different node types.
-    - Ensure smooth user experience.
-    - Gather feedback.
-
-This shifts our immediate focus to delivering a core interactive enhancement, building directly on the performance gains from the FAISS migration. 
+  - Create document parsing modules for common formats
+  - Implement chunking logic for large documents
+  - Design custom embedding strategy for document sections
+  - Add document-specific metadata schema
+  - Create document upload/URL input UI
+  - Implement progress tracking for large ingestion jobs 

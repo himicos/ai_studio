@@ -169,6 +169,7 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
   const [isSearchingGraph, setIsSearchingGraph] = useState(false);
   const [highlightIntensity, setHighlightIntensity] = useState<number>(0.7);
+  const [nodeSimilarities, setNodeSimilarities] = useState<Record<string, number>>({});
   
   // Add state for node weight/attention encoding
   const [nodeWeights, setNodeWeights] = useState<Record<string, NodeMetadata>>({});
@@ -425,37 +426,64 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
       // Clean the query by removing trailing ellipses and whitespace
       const cleanedQuery = graphQuery.trim().replace(/\.{3,}$/, '');
       
-      // Use the same API as semantic search panel
+      // Use the same API as semantic search panel but with lower threshold for more results
       const payload: SemanticSearchRequestPayload = { 
         query_text: cleanedQuery,
-        min_similarity: 0.3 // Lower threshold for graph visualization
+        limit: 50, // Increase limit to get more nodes for highlighting
+        min_similarity: 0.15 // Lower threshold for more comprehensive highlighting
       };
       
       // Try to use the API, fall back to client-side search if it fails
       try {
         const results = await searchMemoryNodes(payload);
         
-        // Create a set of highlighted node IDs
-        const nodeIds = new Set(results.map(result => result.id));
-        setHighlightedNodes(nodeIds);
-        
         if (results.length === 0) {
           toast.info("No similar nodes found in the graph.");
-        } else {
-          toast.success(`Found ${results.length} related node(s) in the graph.`);
-          
-          // Try to track nodes (but don't fail if API returns 405)
-          results.forEach(node => {
-            trackNodeAccess({
-              node_id: node.id,
-              access_type: 'search_result',
-              access_weight: node.similarity // Weight by similarity
-            }).catch(error => {
-              console.error(`Failed to track search result for node ${node.id}:`, error);
-              // Silently continue on error
-            });
-          });
+          setHighlightedNodes(new Set());
+          return;
         }
+        
+        // Create a mapping of node IDs to similarity scores
+        const similarityMap: Record<string, number> = {};
+        const nodeIds = new Set<string>();
+        
+        results.forEach(result => {
+          nodeIds.add(result.id);
+          similarityMap[result.id] = result.similarity || 0;
+        });
+        
+        // Update highlighted nodes
+        setHighlightedNodes(nodeIds);
+        
+        // Store similarity scores for visualization
+        setNodeSimilarities(similarityMap);
+        
+        // Update node colors and sizes based on similarity scores
+        updateNodeVisualization(similarityMap);
+        
+        toast.success(`Found ${results.length} related node(s) in the graph.`);
+        
+        // Zoom to fit highlighted nodes if any found
+        if (graphRef && nodeIds.size > 0) {
+          setTimeout(() => {
+            const nodesToFit = graphNodes.filter(node => nodeIds.has(node.id));
+            if (nodesToFit.length > 0) {
+              graphRef.zoomToFit(500, 50, node => nodeIds.has(node.id));
+            }
+          }, 500);
+        }
+        
+        // Try to track nodes (but don't fail if API returns 405)
+        results.forEach(node => {
+          trackNodeAccess({
+            node_id: node.id,
+            access_type: 'search_result',
+            access_weight: node.similarity // Weight by similarity
+          }).catch(error => {
+            console.error(`Failed to track search result for node ${node.id}:`, error);
+            // Silently continue on error
+          });
+        });
       } catch (error) {
         console.warn("API search failed, falling back to client-side search:", error);
         
@@ -469,23 +497,70 @@ export default function MemoryPanel({ id }: MemoryPanelProps) {
           return queryTerms.some(term => nodeContent.includes(term));
         });
         
-        // Create a set of highlighted node IDs
-        const nodeIds = new Set(matchingNodes.map(node => node.id));
+        // Create a set of highlighted node IDs and approximate similarity scores
+        const nodeIds = new Set<string>();
+        const similarityMap: Record<string, number> = {};
+        
+        matchingNodes.forEach(node => {
+          nodeIds.add(node.id);
+          // Assign approximate similarity of 0.6 for exact matches
+          similarityMap[node.id] = 0.6;
+        });
+        
+        // Update highlighted nodes
         setHighlightedNodes(nodeIds);
+        
+        // Store similarity scores for visualization
+        setNodeSimilarities(similarityMap);
+        
+        // Update node colors and sizes based on similarity scores
+        updateNodeVisualization(similarityMap);
         
         if (matchingNodes.length === 0) {
           toast.info("No similar nodes found in the graph.");
         } else {
           toast.success(`Found ${matchingNodes.length} related node(s) in the graph.`);
+          
+          // Zoom to fit highlighted nodes
+          if (graphRef && nodeIds.size > 0) {
+            setTimeout(() => {
+              graphRef.zoomToFit(500, 50, node => nodeIds.has(node.id));
+            }, 500);
+          }
         }
       }
     } catch (error) {
       console.error("Graph search failed:", error);
       const errorMsg = error instanceof Error ? error.message : "An unknown error occurred.";
       toast.error("Graph search failed", { description: errorMsg });
+      setHighlightedNodes(new Set());
     } finally {
       setIsSearchingGraph(false);
     }
+  };
+  
+  // Add a function to update node visualization based on similarity scores
+  const updateNodeVisualization = (similarityScores: Record<string, number>) => {
+    // Create a copy of the current graph nodes
+    const updatedNodes = [...graphNodes];
+    
+    // Update colors and sizes based on similarity scores
+    updatedNodes.forEach(node => {
+      const similarity = similarityScores[node.id];
+      if (similarity !== undefined) {
+        // Update node color based on similarity score
+        const hue = Math.max(0, Math.min(240, 240 - (similarity * 240))); // 240 (blue) to 0 (red)
+        node.color = `hsl(${hue}, 70%, 50%)`;
+        
+        // Update node size based on similarity
+        const baseSize = NODE_SIZE.MIN;
+        const maxSize = NODE_SIZE.MAX;
+        node.val = baseSize + ((maxSize - baseSize) * similarity);
+      }
+    });
+    
+    // Update graph nodes
+    setGraphNodes(updatedNodes);
   };
 
   // Clear highlights function

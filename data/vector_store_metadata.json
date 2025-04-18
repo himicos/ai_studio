@@ -1,57 +1,158 @@
 {
-  "0": {
-    "id": "dfe0ae44-129e-4494-9103-4fd334c7e703",
-    "title": "Introduction to Artificial Intelligence",
-    "type": "test_document",
-    "tags": [
-      "AI",
-      "machine learning",
-      "technology"
-    ],
-    "created_at": 1744831797
+  "metadata": {
+    "0": {
+      "id": "dfe0ae44-129e-4494-9103-4fd334c7e703",
+      "metadata": {
+        "title": "Introduction to Artificial Intelligence",
+        "type": "test_document",
+        "tags": [
+          "AI",
+          "machine learning",
+          "technology"
+        ],
+        "created_at": 1744831797
+      },
+      "added_at": 1744831797
+    },
+    "1": {
+      "id": "a31ac3bc-02ae-4710-9dc7-fdd53d5cc424",
+      "metadata": {
+        "title": "Natural Language Processing",
+        "type": "test_document",
+        "tags": [
+          "NLP",
+          "language",
+          "AI"
+        ],
+        "created_at": 1744831797
+      },
+      "added_at": 1744831797
+    },
+    "2": {
+      "id": "618ab1db-10ef-4570-b3fd-9df70e51425f",
+      "metadata": {
+        "title": "Computer Vision",
+        "type": "test_document",
+        "tags": [
+          "computer vision",
+          "AI",
+          "image processing"
+        ],
+        "created_at": 1744831797
+      },
+      "added_at": 1744831797
+    },
+    "3": {
+      "id": "0a9f00d2-3eb3-422b-8763-70c507fb27b9",
+      "metadata": {
+        "title": "Machine Learning Fundamentals",
+        "type": "test_document",
+        "tags": [
+          "machine learning",
+          "algorithms",
+          "AI"
+        ],
+        "created_at": 1744831797
+      },
+      "added_at": 1744831797
+    },
+    "4": {
+      "id": "1a192364-026c-4ed6-a262-f32f5103b001",
+      "metadata": {
+        "title": "Ethics in AI",
+        "type": "test_document",
+        "tags": [
+          "ethics",
+          "AI",
+          "society"
+        ],
+        "created_at": 1744831797
+      },
+      "added_at": 1744831797
+    },
+    "5": {
+      "id": "37bf317e-741b-4790-beef-86ab797ffa9e",
+      "metadata": {
+        "id": "37bf317e-741b-4790-beef-86ab797ffa9e",
+        "title": "Artificial Intelligence Basics",
+        "content": "AI is the simulation of human intelligence in machines.",
+        "type": "test_document",
+        "tags": [
+          "AI",
+          "test",
+          "debug"
+        ],
+        "created_at": 1744943868
+      },
+      "added_at": 1744943868
+    },
+    "6": {
+      "id": "6cedc438-2214-4571-8ef1-87e1f8a300c4",
+      "metadata": {
+        "id": "6cedc438-2214-4571-8ef1-87e1f8a300c4",
+        "title": "Machine Learning Applications",
+        "content": "Machine learning powers recommendation systems, fraud detection, and autonomous vehicles.",
+        "type": "test_document",
+        "tags": [
+          "AI",
+          "test",
+          "debug"
+        ],
+        "created_at": 1744943868
+      },
+      "added_at": 1744943868
+    },
+    "7": {
+      "id": "170b36b5-b390-498f-b70a-f07c9ff7f83d",
+      "metadata": {
+        "id": "170b36b5-b390-498f-b70a-f07c9ff7f83d",
+        "title": "Natural Language Processing",
+        "content": "NLP enables computers to understand, interpret, and generate human language.",
+        "type": "test_document",
+        "tags": [
+          "AI",
+          "test",
+          "debug"
+        ],
+        "created_at": 1744943868
+      },
+      "added_at": 1744943868
+    },
+    "8": {
+      "id": "c9065d45-6110-4264-a932-fd48deffc1ed",
+      "metadata": {
+        "id": "c9065d45-6110-4264-a932-fd48deffc1ed",
+        "title": "Computer Vision Systems",
+        "content": "Computer vision allows machines to identify objects and people in images and videos.",
+        "type": "test_document",
+        "tags": [
+          "AI",
+          "test",
+          "debug"
+        ],
+        "created_at": 1744943868
+      },
+      "added_at": 1744943868
+    },
+    "9": {
+      "id": "1627a8a8-968a-418f-a27f-8ca3eb62466e",
+      "metadata": {
+        "id": "1627a8a8-968a-418f-a27f-8ca3eb62466e",
+        "title": "Reinforcement Learning",
+        "content": "Reinforcement learning is training algorithms using rewards and punishments.",
+        "type": "test_document",
+        "tags": [
+          "AI",
+          "test",
+          "debug"
+        ],
+        "created_at": 1744943868
+      },
+      "added_at": 1744943868
+    }
   },
-  "1": {
-    "id": "a31ac3bc-02ae-4710-9dc7-fdd53d5cc424",
-    "title": "Natural Language Processing",
-    "type": "test_document",
-    "tags": [
-      "NLP",
-      "language",
-      "AI"
-    ],
-    "created_at": 1744831797
-  },
-  "2": {
-    "id": "618ab1db-10ef-4570-b3fd-9df70e51425f",
-    "title": "Computer Vision",
-    "type": "test_document",
-    "tags": [
-      "computer vision",
-      "AI",
-      "image processing"
-    ],
-    "created_at": 1744831797
-  },
-  "3": {
-    "id": "0a9f00d2-3eb3-422b-8763-70c507fb27b9",
-    "title": "Machine Learning Fundamentals",
-    "type": "test_document",
-    "tags": [
-      "machine learning",
-      "algorithms",
-      "AI"
-    ],
-    "created_at": 1744831797
-  },
-  "4": {
-    "id": "1a192364-026c-4ed6-a262-f32f5103b001",
-    "title": "Ethics in AI",
-    "type": "test_document",
-    "tags": [
-      "ethics",
-      "AI",
-      "society"
-    ],
-    "created_at": 1744831797
-  }
+  "next_id": 10,
+  "dimensions": 384,
+  "model": "all-MiniLM-L6-v2",
+  "updated_at": 1744943868
 }

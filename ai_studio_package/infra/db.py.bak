@@ -14,7 +14,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Database paths - restore to original correct path
-DB_PATH = "memory/memory.sqlite"  # Unified database path  # Updated for unified approach
+DB_PATH = "data/memory.sqlite"  # Updated for unified approach
 
 def get_db_connection():
     """

@@ -126,7 +126,9 @@ from ai_studio_package.web.routes import settings, twitter, prompts, memory
 from ai_studio_package.web.routes.twitter_agent import router as twitter_agent_router
 from ai_studio_package.web.routes.reddit_agent import router as reddit_agent_router
 from ai_studio_package.web.routes import search_agent
-from ai_studio_package.infra.db_enhanced import init_db, init_vector_db, get_db_connection
+from ai_studio_package.infra.db import init_db
+from ai_studio_package.infra.db_enhanced import init_vector_db, get_memory_stats, get_db_connection, get_vector_db_connection
+from ai_studio_package.web.routes.twitter import router as twitter_router
 
 # Register routers
 app.include_router(settings.router)
@@ -153,15 +155,17 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    # Create required directories
-    os.makedirs("memory/logs", exist_ok=True)
-    os.makedirs("memory/prompt_outputs", exist_ok=True)
-    logger.info("Directories checked/created.")
-    
-    # Initialize databases
+    """
+    Application startup tasks: initialize database, trackers, etc.
+    """
+    logger.info("Starting AI Studio application startup sequence...")
+    # Initialize main database
     init_db()
-    init_vector_db()
-    logger.info("Databases initialized.")
+    logger.info("Main database initialized.")
+    
+    # Initialize vector database (Assuming this still uses db_enhanced or similar)
+    # init_vector_db()
+    # logger.info("Vector database initialized.")
 
     # === Initialize AI Pipelines FIRST ===
     # Check for GPU availability
